@@ -1,34 +1,101 @@
 # analyze CPS
 
 import os
+import re
 import sys
 
 from cr39py import cr39
 import matplotlib.pyplot as plt
 import numpy as np
+from numpy.typing import NDArray
 
 from cmap import CMAP
 
-MAX_DIAMETER = 35
+SLIT_WIDTH = .2  # (cm)
+MAX_CONTRAST = 35
 MAX_ECCENTRICITY = 15
+MAX_DIAMETER = 30
 
-def main(cps1_finger: str, cps2_finger: str, directory: str):
+def main(cps1_finger: str, cps2_finger: str, directory: str) -> None:
 	for filename in os.listdir(directory):
 		if filename.endswith(".cpsa"):
-			file = cr39.CR39(os.path.join(directory, filename))
-			file.add_cut(cr39.Cut(cmax=MAX_DIAMETER, emax=MAX_ECCENTRICITY))
-			x_tracks, y_tracks, d_tracks = file.trackdata_subset[:, 0:3].T
+			calibration_x, calibration_min_energy, calibration_max_energy = load_calibration(filename, cps1_finger, cps2_finger)
+			tracks_x, tracks_y, tracks_d = load_tracks(directory, filename)
 			plt.figure()
-			counts, _, _ = np.histogram2d(x_tracks, y_tracks, bins=100)
-			plt.imshow(counts.T, extent=(np.min(x_tracks), np.max(x_tracks), np.min(y_tracks), np.max(y_tracks)),
-			           vmin=0, vmax=np.quantile(counts, .999),
-			           cmap=CMAP["coffee"], origin="lower")
-			plt.gca().set_aspect('equal', 'box')
+			histogram2d("x (cm)", tracks_x, "y (cm)", tracks_y, filename[:-4])
+			plt.figure()
+			histogram2d("x (cm)", tracks_x, "d (μm)", tracks_d, filename[:-4])
+			plt.figure()
+			plt.fill_between(calibration_x, calibration_min_energy, calibration_max_energy)
 			plt.xlabel("x (cm)")
-			plt.ylabel("y (cm)")
-			plt.title(filename[:-4])
-			plt.tight_layout()
+			plt.ylabel("Proton energy (MeV)")
 			plt.show()
+
+
+def load_calibration(filename: str, cps1_finger: str, cps2_finger: str) -> tuple[NDArray[float], NDArray[float], NDArray[float]]:
+	if "cps1" in filename.lower():
+		cps = 1
+	elif "cps2" in filename.lower():
+		cps = 2
+	elif cps2_finger.lower().startswith("n"):
+		cps = 1
+	elif cps1_finger.lower().startswith("n"):
+		cps = 2
+	else:
+		raise ValueError(f"the filename doesn't make it clear whether CPS1 or CPS2 was used: `{filename}`")
+	finger = cps1_finger if cps == 1 else cps2_finger
+	x, energy = None, None
+	i, j = 0, 0
+	try:
+		with open(os.path.join("calibrations", f"cps{cps}-{finger}.csv"), "r") as file:
+			for line in file:
+				if re.fullmatch(r"\d+\s*", line) and x is None:
+					resolution = (int(line) - 2)//3
+					x = np.empty(resolution)
+					energy = np.empty((3, resolution))
+				elif re.fullmatch(r"[-+.\de]+ , [-+.\de]+\s*", line):
+					values = [float(token) for token in line.split(",")]
+					x[j] = values[0]
+					energy[i, j] = values[1]
+					j += 1
+				elif re.fullmatch(r"1 ,\s*", line):
+					i += 1
+					j = 0
+	except IOError:
+		raise IOError(f"I couldn't find the calibration file for finger {finger} on CPS{cps}.  "
+		              f"please get the calibration from Fredrick’s AnalyzeCR39 program and save it "
+		              f"to a file in the `calibrations` directory called `cps{cps}-{finger}.csv`.")
+	return x, energy[0, :], energy[2, :]
+
+
+def load_tracks(directory: str, filename: str) -> tuple[NDArray[float], NDArray[float], NDArray[float]]:
+	file = cr39.CR39(os.path.join(directory, filename))
+	file.add_cut(cr39.Cut(cmax=MAX_CONTRAST))
+	file.add_cut(cr39.Cut(emax=MAX_ECCENTRICITY))
+	# file.add_cut(cr39.Cut(dmax=MAX_DIAMETER))
+	file.apply_cuts()
+	if file.ntracks == 0:
+		raise ValueError("the file is now empty")
+	tracks_x, tracks_y, tracks_d = file.trackdata_subset[:, [0, 1, 2]].T
+	return tracks_x, tracks_y, tracks_d
+
+
+def histogram2d(x_label: str, x_values: NDArray[float], y_label: str, y_values: NDArray[float], title: str) -> None:
+	spacial_image = "(cm)" in x_label and "(cm)" in y_label
+	counts, _, _ = np.histogram2d(x_values, y_values, bins=100)
+	plt.imshow(counts.T,
+	           extent=(
+	               np.min(x_values), np.max(x_values),
+	               np.min(y_values), np.max(y_values)
+	           ),
+	           aspect="equal" if spacial_image else "auto",
+	           vmin=0, vmax=np.quantile(counts, .999),
+	           cmap=CMAP["coffee"], origin="lower")
+	plt.xlabel(x_label)
+	plt.ylabel(y_label)
+	plt.title(title)
+	plt.tight_layout()
+
 
 if __name__ == "__main__":
 	if len(sys.argv) == 4:
