@@ -1,20 +1,34 @@
 # analyze CPS
 
-import matplotlib.pyplot as plt
-import numpy as np
 import os
 import sys
+
+from cr39py import cr39
+import matplotlib.pyplot as plt
+import numpy as np
+
+from cmap import CMAP
+
+MAX_DIAMETER = 35
+MAX_ECCENTRICITY = 15
 
 def main(cps1_finger: str, cps2_finger: str, directory: str):
 	for filename in os.listdir(directory):
 		if filename.endswith(".cpsa"):
-			print(filename)
-			# file = cr39py.CR39(filename)
-			# file.add_cut(cr39py.Cut(cmax=max_contrast, emax=max_eccentricity,
-			#                         dmin=min_diameter, dmax=max_diameter))
-			# x_tracks, y_tracks = file.get_x(), file.get_y()
-			# plt.histogram(x_tracks, y_tracks, bins=216)
-			# plt.show()
+			file = cr39.CR39(os.path.join(directory, filename))
+			file.add_cut(cr39.Cut(cmax=MAX_DIAMETER, emax=MAX_ECCENTRICITY))
+			x_tracks, y_tracks, d_tracks = file.trackdata_subset[:, 0:3].T
+			plt.figure()
+			counts, _, _ = np.histogram2d(x_tracks, y_tracks, bins=100)
+			plt.imshow(counts.T, extent=(np.min(x_tracks), np.max(x_tracks), np.min(y_tracks), np.max(y_tracks)),
+			           vmin=0, vmax=np.quantile(counts, .999),
+			           cmap=CMAP["coffee"], origin="lower")
+			plt.gca().set_aspect('equal', 'box')
+			plt.xlabel("x (cm)")
+			plt.ylabel("y (cm)")
+			plt.title(filename[:-4])
+			plt.tight_layout()
+			plt.show()
 
 if __name__ == "__main__":
 	if len(sys.argv) == 4:
