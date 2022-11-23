@@ -4,7 +4,7 @@
 
  To run the analysis, simply navigate to the root directory in the command line and call
  ~~~bash
-    python analyze_cps.py {cps1-finger} {cps2-finger} path/to/files/
+ python analyze_cps.py {cps1-finger} {cps2-finger} path/to/files/
  ~~~
  where `{cps1-finger}` stands for the CPS1 configuration (for example “b8w”),
  `{cps2-finger}` stands for the CPS2 configuration (for example “d9”),

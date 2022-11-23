@@ -1,2 +1,18 @@
+# automaticly generated arguments cache
 arguments.txt
+# some hypothetical subfolders in which users could conceivably put their data
+data/*
+my data/*
+my_data/*
+scans/*
+scanfiles/*
+spectra/*
+cps/*
+cr39/*
+downloads/*
+temp/*
+tmp/*
+# compiled python files
 *.pyc
+# intellij files
+.idea/*
