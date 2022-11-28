@@ -3,41 +3,66 @@
 import os
 import re
 import sys
-from math import log, floor, ceil
+from math import log, floor, ceil, pi, sqrt
 
-from cr39py import cr39
 import matplotlib.pyplot as plt
 import numpy as np
+from cr39py import cr39
 from matplotlib import colors
 from numpy.typing import NDArray
 
 from cmap import CMAP
 
 SLIT_WIDTH = .2  # (cm)
-MAX_CONTRAST = 35
-MAX_ECCENTRICITY = 15
-MAX_DIAMETER = 30
+
+MAX_CONTRAST = 35  # (%)
+MAX_ECCENTRICITY = 15  # (%)
+MAX_DIAMETER = 25  # (μm)
+MAX_Y = 1.0  # (cm)
+
+CPS1_DISTANCE = 255  # (cm)
+CPS2_DISTANCE = 255  # (cm)
 
 def main(cps1_finger: str, cps2_finger: str, directory: str) -> None:
 	for filename in os.listdir(directory):
 		if filename.endswith(".cpsa"):
-			calibration_x, calibration_min_energy, calibration_nominal_energy, calibration_max_energy = load_calibration(filename, cps1_finger, cps2_finger)
+			# load the calibration data from disk
+			calibration = load_calibration(filename, cps1_finger, cps2_finger)
+			left, right = np.min(calibration.x), np.max(calibration.x)
+
+			# load the tracks from the cpsa file
 			tracks_x, tracks_y, tracks_d, tracks_c = load_tracks(directory, filename)
+
+			# compute the spacial cuts
+			data_region = (tracks_x >= left) & (tracks_x <= right) & (tracks_y >= -MAX_Y) & (tracks_y <= MAX_Y)
+
+			# plot the data
 			plt.figure()
 			histogram2d("x (cm)", tracks_x, "y (cm)", tracks_y, filename[:-4])
+			plt.plot([left, left, right, right, left],
+			         [-MAX_Y, MAX_Y, MAX_Y, -MAX_Y, -MAX_Y], "k")
 			plt.figure()
-			histogram2d("x (cm)", tracks_x, "d (μm)", tracks_d, filename[:-4])
+			histogram2d("x (cm)", tracks_x[data_region], "d (μm)", tracks_d[data_region], filename[:-4])
 			plt.figure()
-			histogram2d("d (μm)", tracks_d, "c (%)", tracks_c, filename[:-4], log_scale=True)
+			histogram2d("d (μm)", tracks_d[data_region], "c (%)", tracks_c[data_region], filename[:-4], log_scale=True)
 			plt.figure()
-			plt.fill_between(calibration_x, calibration_min_energy, calibration_max_energy, alpha=.5)
-			plt.plot(calibration_x, calibration_nominal_energy)
+			plt.fill_between(calibration.x,
+			                 calibration.minimum_energy,
+			                 calibration.maximum_energy, alpha=.5)
+			plt.plot(calibration.x, calibration.nominal_energy)
 			plt.xlabel("x (cm)")
 			plt.ylabel("Proton energy (MeV)")
+
+			# analyze the data
+			energy, spectrum, spectrum_error = infer_spectrum(tracks_x, calibration)
+
+			# plot the results
+			plt.figure()
+			bar_plot(energy, "Energy (MeV)", spectrum, spectrum_error, "Spectrum (MeV^-1)")
 			plt.show()
 
 
-def load_calibration(filename: str, cps1_finger: str, cps2_finger: str) -> tuple[NDArray[float], NDArray[float], NDArray[float]]:
+def load_calibration(filename: str, cps1_finger: str, cps2_finger: str) -> "CPS":
 	if "cps1" in filename.lower():
 		cps = 1
 	elif "cps2" in filename.lower():
@@ -48,7 +73,14 @@ def load_calibration(filename: str, cps1_finger: str, cps2_finger: str) -> tuple
 		cps = 2
 	else:
 		raise ValueError(f"the filename doesn't make it clear whether CPS1 or CPS2 was used: `{filename}`")
-	finger = cps1_finger if cps == 1 else cps2_finger
+	if cps == 1:
+		finger = cps1_finger
+		slit_distance = CPS1_DISTANCE
+	elif cps == 2:
+		finger = cps2_finger
+		slit_distance = CPS2_DISTANCE
+	else:
+		raise ValueError()
 	x, energy = None, None
 	i, j = 0, 0
 	try:
@@ -72,7 +104,7 @@ def load_calibration(filename: str, cps1_finger: str, cps2_finger: str) -> tuple
 		              f"to a file in the `calibrations` directory called `cps{cps}-{finger}.csv`.")
 	if x is None or energy is None:
 		raise RuntimeError
-	return x, energy[0, :], energy[1, :], energy[2, :]
+	return CPS(cps, finger, slit_distance, SLIT_WIDTH, x, energy[0, :], energy[1, :], energy[2, :])
 
 
 def load_tracks(directory: str, filename: str) -> tuple[NDArray[float], NDArray[float], NDArray[float], NDArray[float]]:
@@ -80,12 +112,22 @@ def load_tracks(directory: str, filename: str) -> tuple[NDArray[float], NDArray[
 	file.add_cut(cr39.Cut(cmin=MAX_CONTRAST))
 	file.add_cut(cr39.Cut(emin=MAX_ECCENTRICITY))
 	file.add_cut(cr39.Cut(dmin=MAX_DIAMETER))
-	file.add_cut(cr39.Cut(ymin=1.35))
 	file.apply_cuts()
 	if file.ntracks == 0:
 		raise ValueError("the file is now empty")
 	tracks_x, tracks_y, tracks_d, tracks_c = file.trackdata_subset[:, [0, 1, 2, 3]].T
 	return tracks_x, tracks_y, tracks_d, tracks_c
+
+
+def infer_spectrum(x_list: NDArray[float], calibration: "CPS") -> tuple[NDArray[float], NDArray[float], NDArray[float]]:
+	efficiency = 2*MAX_Y*calibration.slit_width/(4*pi*calibration.slit_distance**2)
+	energy_bins = np.linspace(np.min(calibration.nominal_energy),
+	                          np.max(calibration.nominal_energy),
+	                          ceil(sqrt(x_list.size)))
+	x_bins = np.interp(energy_bins, calibration.nominal_energy, calibration.x)
+	counts, _ = np.histogram(x_list, x_bins)
+	errors = np.sqrt(counts + 1)
+	return energy_bins, counts/efficiency, errors/efficiency
 
 
 def histogram2d(x_label: str, x_values: NDArray[float], y_label: str, y_values: NDArray[float], title: str, log_scale=False) -> None:
@@ -101,8 +143,8 @@ def histogram2d(x_label: str, x_values: NDArray[float], y_label: str, y_values: 
 			bin_width = max((maximum - minimum)/80, .1)
 		else:
 			bin_width = (maximum - minimum)/80
-		bins.append(np.arange(floor(minimum/bin_width),
-		                      ceil(maximum/bin_width) + 2)*bin_width)
+		bins.append(np.arange(ceil(minimum/bin_width),
+		                      floor(maximum/bin_width) + 1)*bin_width)
 	counts, _, _ = np.histogram2d(x_values, y_values, bins=bins)
 	vmax = np.quantile(counts, .999)
 	if log_scale and vmax > 1e3:
@@ -125,6 +167,31 @@ def histogram2d(x_label: str, x_values: NDArray[float], y_label: str, y_values: 
 	plt.ylabel(y_label)
 	plt.title(title)
 	plt.tight_layout()
+
+
+def bar_plot(bar_edges: NDArray[float], x_label: str,
+             bar_heights: NDArray[float], bar_errors: NDArray[float], y_label: str) -> None:
+	x = np.repeat(bar_edges, 2)[1:-1]
+	y = np.repeat(bar_heights, 2)
+	plt.plot(x, y, "k-", linewidth=1)
+	bar_centers = (bar_edges[:-1] + bar_edges[1:])/2
+	plt.errorbar(x=bar_centers, y=bar_heights, yerr=bar_errors, fmt="k-", linewidth=1)
+	plt.xlabel(x_label)
+	plt.ylabel(y_label)
+
+
+class CPS:
+	def __init__(self, cps: int, finger: str, slit_distance: float, slit_width: float,
+	             x: NDArray[float], minimum_energy: NDArray[float],
+	             nominal_energy: NDArray[float], maximum_energy: NDArray[float]):
+		self.cps = cps
+		self.finger = finger
+		self.slit_distance = slit_distance
+		self.slit_width = slit_width
+		self.x = x
+		self.minimum_energy = minimum_energy
+		self.nominal_energy = nominal_energy
+		self.maximum_energy = maximum_energy
 
 
 if __name__ == "__main__":

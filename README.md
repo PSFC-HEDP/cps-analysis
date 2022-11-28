@@ -2,6 +2,8 @@
 
  Simple compand-line utility to extract charged particle spectra from CPS scans.
 
+## How to use
+
  To run the analysis, simply navigate to the root directory in the command line and call
  ~~~bash
  python analyze_cps.py {cps1-finger} {cps2-finger} path/to/files/
@@ -16,6 +18,14 @@
  so if you have a use case that doesn’t seem to be covered by the choices you’re given,
  you may need to go use that.
  But I hope that this will cover most use cases in a more convenient format.
+
+## Limitations
+
+ This analysis currently assumes a slit width of 2mm.
+ You will need to modify the script if you want to use it for 1mm.
+
+ There is also no provision for ramped background subtraction,
+ so users will have to make do with flat background for now.
 
 ## Dependencies
 
