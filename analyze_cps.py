@@ -136,15 +136,20 @@ def histogram2d(x_label: str, x_values: NDArray[float], y_label: str, y_values: 
 	for label, values in [(x_label, x_values), (y_label, y_values)]:
 		minimum, maximum = np.min(values), np.max(values)
 		if "(%)" in label:
-			bin_width = 1
+			bin_width, bin_number, quantized = 1, None, True
 		elif "(cm)" in label:
-			bin_width = .03
+			bin_width, bin_number, quantized = .03, None, False
 		elif "(μm)" in label:
-			bin_width = max((maximum - minimum)/80, .1)
+			bin_width, bin_number, quantized = None, min(80, floor((maximum - minimum)/.1)), False
 		else:
-			bin_width = (maximum - minimum)/80
-		bins.append(np.arange(ceil(minimum/bin_width),
-		                      floor(maximum/bin_width) + 1)*bin_width)
+			bin_width, bin_number, quantized = None, 80, False
+		if quantized:
+			bins.append(np.arange(floor(minimum/bin_width),
+			                      floor(maximum/bin_width) + 2)*bin_width)
+		else:
+			if bin_number is None:
+				bin_number = round((maximum - minimum)/bin_width)
+			bins.append(np.linspace(minimum, maximum, bin_number + 1))
 	counts, _, _ = np.histogram2d(x_values, y_values, bins=bins)
 	vmax = np.quantile(counts, .999)
 	if log_scale and vmax > 1e3:
