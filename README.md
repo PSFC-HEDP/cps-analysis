@@ -12,7 +12,14 @@
  `{cps2-finger}` stands for the CPS2 configuration (for example “d9”),
  and `path/to/files/` stands for the directory, absolute or relative, that contains the `.cpsa` files.
  If one of the CPS was not run, you may set its configuration to “none”.
- Follow the instructions on screen to choose diameter cuts and such.
+
+ You will be prompted to click on the plot to select the diameter limits.
+ Each time you click, it will place a new point on the plot.
+ To use diagonal diameter cuts, you'll want to click from left to right,
+ drawing a line either above or below the signal region.
+ Once you get to the right end, start clicking from the left again to place the limit on the other side.
+ Pay attention to how the lines appear to make sure it's understanding you correctly.
+
 
  This program isn’t as powerful as Fredrick’s AnalyzeCR39,
  so if you have a use case that doesn’t seem to be covered by the choices you’re given,

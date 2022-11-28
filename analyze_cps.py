@@ -4,12 +4,15 @@ import os
 import re
 import sys
 from math import log, floor, ceil, pi, sqrt
+from typing import Callable
 
 import matplotlib.pyplot as plt
 import numpy as np
 from cr39py import cr39
 from matplotlib import colors
+from matplotlib.backend_bases import MouseEvent, MouseButton
 from numpy.typing import NDArray
+from scipy import interpolate
 
 from cmap import CMAP
 
@@ -18,7 +21,8 @@ SLIT_WIDTH = .2  # (cm)
 MAX_CONTRAST = 35  # (%)
 MAX_ECCENTRICITY = 15  # (%)
 MAX_DIAMETER = 25  # (μm)
-MAX_Y = 1.0  # (cm)
+MIN_Y = -1.2  # (cm)
+MAX_Y = 0.9  # (cm)
 
 CPS1_DISTANCE = 255  # (cm)
 CPS2_DISTANCE = 255  # (cm)
@@ -34,17 +38,24 @@ def main(cps1_finger: str, cps2_finger: str, directory: str) -> None:
 			tracks_x, tracks_y, tracks_d, tracks_c = load_tracks(directory, filename)
 
 			# compute the spacial cuts
-			data_region = (tracks_x >= left) & (tracks_x <= right) & (tracks_y >= -MAX_Y) & (tracks_y <= MAX_Y)
+			data_region = (tracks_x >= left) & (tracks_x <= right) & \
+			              (tracks_y >= MIN_Y) & (tracks_y <= MAX_Y)
+
+			# ask the user about the diameter cuts
+			min_diameter, max_diameter = choose_signal_region(tracks_x[data_region],
+			                                                  tracks_d[data_region])
+			signal = data_region & \
+			         (tracks_d >= min_diameter(tracks_x)) & \
+			         (tracks_d <= max_diameter(tracks_x))
 
 			# plot the data
 			plt.figure()
 			histogram2d("x (cm)", tracks_x, "y (cm)", tracks_y, filename[:-4])
 			plt.plot([left, left, right, right, left],
-			         [-MAX_Y, MAX_Y, MAX_Y, -MAX_Y, -MAX_Y], "k")
+			         [MIN_Y, MAX_Y, MAX_Y, MIN_Y, MIN_Y], "k")
 			plt.figure()
-			histogram2d("x (cm)", tracks_x[data_region], "d (μm)", tracks_d[data_region], filename[:-4])
-			plt.figure()
-			histogram2d("d (μm)", tracks_d[data_region], "c (%)", tracks_c[data_region], filename[:-4], log_scale=True)
+			histogram2d("d (μm)", tracks_d[signal], "c (%)", tracks_c[signal],
+			            filename[:-4], log_scale=True)
 			plt.figure()
 			plt.fill_between(calibration.x,
 			                 calibration.minimum_energy,
@@ -54,11 +65,11 @@ def main(cps1_finger: str, cps2_finger: str, directory: str) -> None:
 			plt.ylabel("Proton energy (MeV)")
 
 			# analyze the data
-			energy, spectrum, spectrum_error = infer_spectrum(tracks_x, calibration)
+			energy, spectrum, spectrum_error = infer_spectrum(tracks_x[signal], calibration)
 
 			# plot the results
 			plt.figure()
-			bar_plot(energy, "Energy (MeV)", spectrum, spectrum_error, "Spectrum (MeV^-1)")
+			bar_plot("Energy (MeV)", energy, "Spectrum (MeV^-1)", spectrum, spectrum_error)
 			plt.show()
 
 
@@ -72,7 +83,8 @@ def load_calibration(filename: str, cps1_finger: str, cps2_finger: str) -> "CPS"
 	elif cps1_finger.lower().startswith("n"):
 		cps = 2
 	else:
-		raise ValueError(f"the filename doesn't make it clear whether CPS1 or CPS2 was used: `{filename}`")
+		raise ValueError(f"the filename doesn't make it clear whether CPS1 or CPS2 was used: "
+		                 f"`{filename}`")
 	if cps == 1:
 		finger = cps1_finger
 		slit_distance = CPS1_DISTANCE
@@ -107,7 +119,8 @@ def load_calibration(filename: str, cps1_finger: str, cps2_finger: str) -> "CPS"
 	return CPS(cps, finger, slit_distance, SLIT_WIDTH, x, energy[0, :], energy[1, :], energy[2, :])
 
 
-def load_tracks(directory: str, filename: str) -> tuple[NDArray[float], NDArray[float], NDArray[float], NDArray[float]]:
+def load_tracks(directory: str, filename: str
+                ) -> tuple[NDArray[float], NDArray[float], NDArray[float], NDArray[float]]:
 	file = cr39.CR39(os.path.join(directory, filename))
 	file.add_cut(cr39.Cut(cmin=MAX_CONTRAST))
 	file.add_cut(cr39.Cut(emin=MAX_ECCENTRICITY))
@@ -119,8 +132,79 @@ def load_tracks(directory: str, filename: str) -> tuple[NDArray[float], NDArray[
 	return tracks_x, tracks_y, tracks_d, tracks_c
 
 
-def infer_spectrum(x_list: NDArray[float], calibration: "CPS") -> tuple[NDArray[float], NDArray[float], NDArray[float]]:
-	efficiency = 2*MAX_Y*calibration.slit_width/(4*pi*calibration.slit_distance**2)
+def choose_signal_region(x_list: NDArray[float], d_list: NDArray[float]
+                         ) -> tuple[Callable[[NDArray[float]], NDArray[float]], Callable[[NDArray[float]], NDArray[float]]]:
+	left, right = np.min(x_list), np.max(x_list)
+
+	fig = plt.figure(1)
+	histogram2d("x (cm)", x_list, "Diameter (μm)", d_list,
+	            "click on the plot to select the minimum and maximum diameter, "
+	            "then close this window.")
+	lines = [plt.plot([], [], "k-")[0], plt.plot([], [], "k-")[0]]
+	cursor, = plt.plot([], [], "ko")
+	# if default is not None:
+	# 	default_cuts, = plt.plot(default[:, 0], default[:, 1], "k-", alpha=0.3)
+	# else:
+	# 	default_cuts, = plt.plot([], []) TODO: load the previus one as a default
+
+	cuts: list[list[Point]] = []
+
+	def on_click(event: MouseEvent):
+		# whenever the user clicks...
+		if type(event) is MouseEvent:
+			# if it's a right-click, delete a point
+			if event.button == MouseButton.RIGHT:
+				if len(cuts) > 0:
+					if len(cuts[-1]) > 1:
+						cuts[-1].pop()
+					else:
+						cuts.pop()
+			else:
+				# determine whether they are continuing a line or starting a new one
+				if len(cuts) == 0 or event.xdata < cuts[-1][-1].x:
+					cuts.append([])
+				if len(cuts) > 2:
+					raise ValueError("there should only be two lines: one above the signal and one "
+					                 "below.")
+				# either way, save the recent click as a new point
+				cuts[-1].append(Point(event.xdata, event.ydata))
+			# then update the plot
+			# default_cuts.set_visible(False)
+			for line in lines:
+				line.set_visible(False)
+			for cut, line in zip(cuts, lines):
+				line.set_visible(True)
+				line.set_xdata([left] + [point.x for point in cut] + [right])
+				line.set_ydata([cut[0].y] + [point.y for point in cut] + [cut[-1].y])
+			if len(cuts) >= 1:
+				cursor.set_visible(True)
+				cursor.set_xdata([cuts[-1][-1].x])
+				cursor.set_ydata([cuts[-1][-1].y])
+			else:
+				cursor.set_visible(False)
+	fig.canvas.mpl_connect('button_press_event', on_click)
+
+	while plt.fignum_exists(1):
+		plt.pause(.1)
+
+	# once the user is done, process the results into interpolator functions
+	if len(cuts) < 1:
+		cuts.append([Point(0, np.max(d_list))])
+	if len(cuts) < 2:
+		cuts.append([Point(0, 0)])
+	cuts = sorted(cuts, key=lambda line: line[0].y)
+	interpolators = []
+	for cut in cuts:
+		cut = [Point(left, cut[0].y)] + cut + [Point(right, cut[-1].y)]
+		interpolators.append(interpolate.interp1d([point.x for point in cut],
+		                                          [point.y for point in cut],
+		                                          bounds_error=False))
+	return interpolators[0], interpolators[1]
+
+
+def infer_spectrum(x_list: NDArray[float], calibration: "CPS"
+                   ) -> tuple[NDArray[float], NDArray[float], NDArray[float]]:
+	efficiency = (MAX_Y - MIN_Y)*calibration.slit_width/(4*pi*calibration.slit_distance**2)
 	energy_bins = np.linspace(np.min(calibration.nominal_energy),
 	                          np.max(calibration.nominal_energy),
 	                          ceil(sqrt(x_list.size)))
@@ -130,7 +214,8 @@ def infer_spectrum(x_list: NDArray[float], calibration: "CPS") -> tuple[NDArray[
 	return energy_bins, counts/efficiency, errors/efficiency
 
 
-def histogram2d(x_label: str, x_values: NDArray[float], y_label: str, y_values: NDArray[float], title: str, log_scale=False) -> None:
+def histogram2d(x_label: str, x_values: NDArray[float], y_label: str, y_values: NDArray[float],
+                title: str, log_scale=False) -> None:
 	spacial_image = "(cm)" in x_label and "(cm)" in y_label
 	bins = []
 	for label, values in [(x_label, x_values), (y_label, y_values)]:
@@ -174,8 +259,8 @@ def histogram2d(x_label: str, x_values: NDArray[float], y_label: str, y_values: 
 	plt.tight_layout()
 
 
-def bar_plot(bar_edges: NDArray[float], x_label: str,
-             bar_heights: NDArray[float], bar_errors: NDArray[float], y_label: str) -> None:
+def bar_plot(x_label: str, bar_edges: NDArray[float],
+             y_label: str, bar_heights: NDArray[float], bar_errors: NDArray[float]) -> None:
 	x = np.repeat(bar_edges, 2)[1:-1]
 	y = np.repeat(bar_heights, 2)
 	plt.plot(x, y, "k-", linewidth=1)
@@ -183,6 +268,12 @@ def bar_plot(bar_edges: NDArray[float], x_label: str,
 	plt.errorbar(x=bar_centers, y=bar_heights, yerr=bar_errors, fmt="k-", linewidth=1)
 	plt.xlabel(x_label)
 	plt.ylabel(y_label)
+
+
+class Point:
+	def __init__(self, x: float, y: float):
+		self.x = x
+		self.y = y
 
 
 class CPS:
@@ -203,7 +294,9 @@ if __name__ == "__main__":
 	if len(sys.argv) == 4:
 		cps1_finger, cps2_finger, directory = sys.argv[1:]
 		with open("arguments.txt", "w") as file:
-			file.write(f"cps1-finger={cps1_finger}\ncps2-finger={cps2_finger}\ndirectory={directory}\n")
+			file.write(f"cps1-finger={cps1_finger}\n"
+			           f"cps2-finger={cps2_finger}\n"
+			           f"directory={directory}\n")
 	elif len(sys.argv) == 1:
 		cps1_finger, cps2_finger, directory = None, None, None
 		try:
@@ -219,18 +312,22 @@ if __name__ == "__main__":
 						elif "directory" in key or "path" in key:
 							directory = value
 						else:
-							raise ValueError("The `arguments.txt` file contains an unrecognized key: {key}")
+							raise ValueError(f"The `arguments.txt` file contains an unrecognized "
+							                 f"key: {key}")
 		except IOError:
 			raise ValueError("You must run this script with three command line arguments: "
 			                 "`python analyze_cps.py cps1-finger cps2-finger directory`; "
-			                 "or specify the arguments by creating a file called `arguments.txt` formatted like"
-			                 "\n  “cps1-finger=a1\n   cps2-finger=b2w\n   directory=example/path/”")
+			                 "or specify the arguments by creating a file called `arguments.txt` "
+			                 "formatted like\n"
+			                 "  “cps1-finger=a1\n   cps2-finger=b2w\n   directory=example/path/”")
 		if cps1_finger is None or cps2_finger is None or directory is None:
-			raise ValueError("The `arguments.txt` file was missing some of the three required arguments.")
+			raise ValueError("The `arguments.txt` file was missing some of the three required "
+			                 "arguments.")
 	else:
 		raise ValueError("You must run this script with exactly three command line arguments: "
 		                 "`python analyze_cps.py cps1-finger cps2-finger directory`, "
-		                 "or alternatively specify the arguments by creating a file called `arguments.txt` formatted like "
-		                 "\n  “cps1-finger=a1\n   cps2-finger=b2w\n   directory=example/path/”")
+		                 "or alternatively specify the arguments by creating a file called "
+		                 "`arguments.txt` formatted like \n"
+		                 "  “cps1-finger=a1\n   cps2-finger=b2w\n   directory=example/path/”")
 
 	main(cps1_finger, cps2_finger, directory)
