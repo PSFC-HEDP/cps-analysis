@@ -27,11 +27,14 @@ MAX_Y = 0.9  # (cm)
 CPS1_DISTANCE = 255  # (cm)
 CPS2_DISTANCE = 255  # (cm)
 
-def main(cps1_finger: str, cps2_finger: str, directory: str) -> None:
+def main(cps1_finger: str, cps2_finger: str, particle: str, directory: str) -> None:
 	for filename in os.listdir(directory):
 		if filename.endswith(".cpsa"):
+			# parse the particle type
+			particle_name, particle_mass = parse_particle(particle)
+
 			# load the calibration data from disk
-			calibration = load_calibration(filename, cps1_finger, cps2_finger)
+			calibration = load_calibration(filename, cps1_finger, cps2_finger, particle_mass)
 			left, right = np.min(calibration.x), np.max(calibration.x)
 
 			# load the tracks from the cpsa file
@@ -54,7 +57,7 @@ def main(cps1_finger: str, cps2_finger: str, directory: str) -> None:
 			plt.plot([left, left, right, right, left],
 			         [MIN_Y, MAX_Y, MAX_Y, MIN_Y, MIN_Y], "k")
 			plt.figure()
-			histogram2d("d (μm)", tracks_d[signal], "c (%)", tracks_c[signal],
+			histogram2d("Track diameter (μm)", tracks_d[signal], "Track contrast (%)", tracks_c[signal],
 			            filename[:-4], log_scale=True)
 			plt.figure()
 			plt.fill_between(calibration.x,
@@ -62,18 +65,18 @@ def main(cps1_finger: str, cps2_finger: str, directory: str) -> None:
 			                 calibration.maximum_energy, alpha=.5)
 			plt.plot(calibration.x, calibration.nominal_energy)
 			plt.xlabel("x (cm)")
-			plt.ylabel("Proton energy (MeV)")
+			plt.ylabel(f"{particle_name} energy (MeV)")
 
 			# analyze the data
-			energy, spectrum, spectrum_error = infer_spectrum(tracks_x[signal], calibration)
+			energy, spectrum, spectrum_error = infer_spectrum(tracks_x[signal], calibration, particle)
 
 			# plot the results
 			plt.figure()
-			bar_plot("Energy (MeV)", energy, "Spectrum (MeV^-1)", spectrum, spectrum_error)
+			bar_plot(f"{particle_name} energy (MeV)", energy, "Spectrum (MeV^-1)", spectrum, spectrum_error)
 			plt.show()
 
 
-def load_calibration(filename: str, cps1_finger: str, cps2_finger: str) -> "CPS":
+def load_calibration(filename: str, cps1_finger: str, cps2_finger: str, particle_mass: float) -> "CPS":
 	if "cps1" in filename.lower():
 		cps = 1
 	elif "cps2" in filename.lower():
@@ -85,6 +88,7 @@ def load_calibration(filename: str, cps1_finger: str, cps2_finger: str) -> "CPS"
 	else:
 		raise ValueError(f"the filename doesn't make it clear whether CPS1 or CPS2 was used: "
 		                 f"`{filename}`")
+
 	if cps == 1:
 		finger = cps1_finger
 		slit_distance = CPS1_DISTANCE
@@ -116,6 +120,8 @@ def load_calibration(filename: str, cps1_finger: str, cps2_finger: str) -> "CPS"
 		              f"to a file in the `calibrations` directory called `cps{cps}-{finger}.csv`.")
 	if x is None or energy is None:
 		raise RuntimeError
+
+	energy /= particle_mass
 	return CPS(cps, finger, slit_distance, SLIT_WIDTH, x, energy[0, :], energy[1, :], energy[2, :])
 
 
@@ -132,12 +138,40 @@ def load_tracks(directory: str, filename: str
 	return tracks_x, tracks_y, tracks_d, tracks_c
 
 
+def parse_particle(code: str) -> tuple[str, float]:
+	if particle.lower().startswith("p"):
+		mass = 1
+	elif particle.lower().startswith("d"):
+		mass = 2
+	elif particle.lower().startswith("t"):
+		mass = 3
+	elif particle.lower().startswith("a"):
+		mass = 1/2
+	else:
+		try:
+			mass = float(particle)
+		except ValueError:
+			raise ValueError(f"Unrecognized charged particle: '{particle}'")
+
+	if round(mass, 1) == 0.5:
+		name = "Alpha"
+	elif round(mass, 1) == 1.0:
+		name = "Proton"
+	elif round(mass, 1) == 2.0:
+		name = "Deuteron"
+	elif round(mass, 1) == 3.0:
+		name = "Triton"
+	else:
+		name = "Particle"
+	return name, mass
+
+
 def choose_signal_region(x_list: NDArray[float], d_list: NDArray[float]
                          ) -> tuple[Callable[[NDArray[float]], NDArray[float]], Callable[[NDArray[float]], NDArray[float]]]:
 	left, right = np.min(x_list), np.max(x_list)
 
 	fig = plt.figure(1)
-	histogram2d("x (cm)", x_list, "Diameter (μm)", d_list,
+	histogram2d("x (cm)", x_list, "Track diameter (μm)", d_list,
 	            "click on the plot to select the minimum and maximum diameter, "
 	            "then close this window.")
 	lines = [plt.plot([], [], "k-")[0], plt.plot([], [], "k-")[0]]
@@ -202,7 +236,7 @@ def choose_signal_region(x_list: NDArray[float], d_list: NDArray[float]
 	return interpolators[0], interpolators[1]
 
 
-def infer_spectrum(x_list: NDArray[float], calibration: "CPS"
+def infer_spectrum(x_list: NDArray[float], calibration: "CPS", particle: str
                    ) -> tuple[NDArray[float], NDArray[float], NDArray[float]]:
 	efficiency = (MAX_Y - MIN_Y)*calibration.slit_width/(4*pi*calibration.slit_distance**2)
 	energy_bins = np.linspace(np.min(calibration.nominal_energy),
@@ -291,24 +325,27 @@ class CPS:
 
 
 if __name__ == "__main__":
-	if len(sys.argv) == 4:
-		cps1_finger, cps2_finger, directory = sys.argv[1:]
+	if len(sys.argv) == 5:
+		cps1_finger, cps2_finger, particle, directory = sys.argv[1:]
 		with open("arguments.txt", "w") as file:
 			file.write(f"cps1-finger={cps1_finger}\n"
 			           f"cps2-finger={cps2_finger}\n"
+			           f"particle={particle}\n"
 			           f"directory={directory}\n")
 	elif len(sys.argv) == 1:
-		cps1_finger, cps2_finger, directory = None, None, None
+		cps1_finger, cps2_finger, particle, directory = None, None, None, None
 		try:
 			with open("arguments.txt", "r") as file:
 				for line in file:
 					if "=" in line:
-						key = line[:line.index("=")].strip()
-						value = line[line.index("=") + 1:].strip()
+						key = line[:line.index("=")].lower()
+						value = line[line.index("=") + 1:].lower().strip()
 						if "cps1" in key:
 							cps1_finger = value
 						elif "cps2" in key:
 							cps2_finger = value
+						elif "particle" in key or "ion" in key or "a/z^2" in key:
+							particle = value
 						elif "directory" in key or "path" in key:
 							directory = value
 						else:
@@ -319,15 +356,17 @@ if __name__ == "__main__":
 			                 "`python analyze_cps.py cps1-finger cps2-finger directory`; "
 			                 "or specify the arguments by creating a file called `arguments.txt` "
 			                 "formatted like\n"
-			                 "  “cps1-finger=a1\n   cps2-finger=b2w\n   directory=example/path/”")
-		if cps1_finger is None or cps2_finger is None or directory is None:
-			raise ValueError("The `arguments.txt` file was missing some of the three required "
-			                 "arguments.")
+			                 "  “cps1-finger=a1\n   cps2-finger=b2w\n"
+			                 "   particle=d\n   directory=example/path/”")
+		if cps1_finger is None or cps2_finger is None or particle is None or directory is None:
+			raise ValueError("The `arguments.txt` file was missing some of the four required "
+			                 "arguments: cps1, cps2, key, and directory.")
 	else:
 		raise ValueError("You must run this script with exactly three command line arguments: "
 		                 "`python analyze_cps.py cps1-finger cps2-finger directory`, "
 		                 "or alternatively specify the arguments by creating a file called "
 		                 "`arguments.txt` formatted like \n"
-		                 "  “cps1-finger=a1\n   cps2-finger=b2w\n   directory=example/path/”")
+		                 "  “cps1-finger=a1\n   cps2-finger=b2w\n"
+		                 "   particle=d\n   directory=example/path/”")
 
-	main(cps1_finger, cps2_finger, directory)
+	main(cps1_finger, cps2_finger, particle, directory)

@@ -6,10 +6,11 @@
 
  To run the analysis, simply navigate to the root directory in the command line and call
  ~~~bash
- python analyze_cps.py {cps1-finger} {cps2-finger} path/to/files/
+ python analyze_cps.py {cps1-finger} {cps2-finger} {particle} path/to/files/
  ~~~
  where `{cps1-finger}` stands for the CPS1 configuration (for example “b8w”),
  `{cps2-finger}` stands for the CPS2 configuration (for example “d9”),
+ `{particle}` stands for the particle being measured or the A/Z^2 of the particle being measured (for example “d” or “2”)
  and `path/to/files/` stands for the directory, absolute or relative, that contains the `.cpsa` files.
  If one of the CPS was not run, you may set its configuration to “none”.
 
