@@ -4,28 +4,39 @@ import os
 import re
 import sys
 from math import log, floor, ceil, pi, sqrt
-from typing import Callable
+from typing import Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
+import xarray as xr
 from cr39py import cr39
 from matplotlib import colors
 from matplotlib.backend_bases import MouseEvent, MouseButton
 from numpy.typing import NDArray
+from pandas import DataFrame
 from scipy import interpolate
+from xarray import DataArray
 
 from cmap import CMAP
 
 SLIT_WIDTH = .2  # (cm)
 
+BACKGROUND_REGION = (-1.5, 1.5, 1.0, 1.5)  # x_min, x_max, y_min, y_max (cm)
+DATA_REGION = (-1.2, 0.9)  # y_min, y_max (cm)
+
 MAX_CONTRAST = 35  # (%)
 MAX_ECCENTRICITY = 15  # (%)
 MAX_DIAMETER = 25  # (μm)
-MIN_Y = -1.2  # (cm)
-MAX_Y = 0.9  # (cm)
 
 CPS1_DISTANCE = 255  # (cm)
 CPS2_DISTANCE = 255  # (cm)
+
+X = "x (cm)"
+Y = "y (cm)"
+D = "Track diameter (μm)"
+C = "Track contrast (%)"
+SPACIAL_DIMS = {X, Y}
+
 
 def main(cps1_finger: str, cps2_finger: str, particle: str, directory: str) -> None:
 	for filename in os.listdir(directory):
@@ -38,41 +49,41 @@ def main(cps1_finger: str, cps2_finger: str, particle: str, directory: str) -> N
 			left, right = np.min(calibration.x), np.max(calibration.x)
 
 			# load the tracks from the cpsa file
-			tracks_x, tracks_y, tracks_d, tracks_c = load_tracks(directory, filename)
+			tracks = load_tracks(directory, filename)
 
 			# compute the spacial cuts
-			data_region = (tracks_x >= left) & (tracks_x <= right) & \
-			              (tracks_y >= MIN_Y) & (tracks_y <= MAX_Y)
+			background_region = in_rectangle(tracks, *BACKGROUND_REGION)
+			data_region = in_rectangle(tracks, left, right, *DATA_REGION)
+
+			# calculate the background
+			background = calculate_background(tracks[background_region])
 
 			# ask the user about the diameter cuts
-			min_diameter, max_diameter = choose_signal_region(tracks_x[data_region],
-			                                                  tracks_d[data_region])
-			signal = data_region & \
-			         (tracks_d >= min_diameter(tracks_x)) & \
-			         (tracks_d <= max_diameter(tracks_x))
+			min_diameter, max_diameter = choose_signal_region(tracks[data_region], background)
+			signal = data_region & apply_diagonal_cuts(tracks, min_diameter, max_diameter)
 
 			# plot the data
 			plt.figure()
-			histogram2d("x (cm)", tracks_x, "y (cm)", tracks_y, filename[:-4])
-			plt.plot([left, left, right, right, left],
-			         [MIN_Y, MAX_Y, MAX_Y, MIN_Y, MIN_Y], "k")
+			plot_2d_histogram(tracks, X, Y, filename[:-4])
+			plot_rectangle(*BACKGROUND_REGION, label="Background region")
+			plot_rectangle(left, right, *DATA_REGION, label="Signal region")
 			plt.figure()
-			histogram2d("Track diameter (μm)", tracks_d[signal], "Track contrast (%)", tracks_c[signal],
-			            filename[:-4], log_scale=True)
+			plot_2d_histogram(tracks[signal], D, C, filename[:-4], background, log_scale=True)
 			plt.figure()
 			plt.fill_between(calibration.x,
 			                 calibration.minimum_energy,
 			                 calibration.maximum_energy, alpha=.5)
 			plt.plot(calibration.x, calibration.nominal_energy)
-			plt.xlabel("x (cm)")
+			plt.xlabel(X)
 			plt.ylabel(f"{particle_name} energy (MeV)")
 
 			# analyze the data
-			energy, spectrum, spectrum_error = infer_spectrum(tracks_x[signal], calibration, particle)
+			energy, spectrum, spectrum_error = infer_spectrum(
+				tracks[signal], calibration, background, min_diameter, max_diameter)
 
 			# plot the results
 			plt.figure()
-			bar_plot(f"{particle_name} energy (MeV)", energy, "Spectrum (MeV^-1)", spectrum, spectrum_error)
+			plot_bars(f"{particle_name} energy (MeV)", energy, "Spectrum (MeV^-1)", spectrum, spectrum_error)
 			plt.show()
 
 
@@ -126,32 +137,33 @@ def load_calibration(filename: str, cps1_finger: str, cps2_finger: str, particle
 
 
 def load_tracks(directory: str, filename: str
-                ) -> tuple[NDArray[float], NDArray[float], NDArray[float], NDArray[float]]:
+                ) -> DataFrame:
 	file = cr39.CR39(os.path.join(directory, filename))
 	file.add_cut(cr39.Cut(cmin=MAX_CONTRAST))
 	file.add_cut(cr39.Cut(emin=MAX_ECCENTRICITY))
 	file.add_cut(cr39.Cut(dmin=MAX_DIAMETER))
 	file.apply_cuts()
 	if file.ntracks == 0:
-		raise ValueError("the file is now empty")
-	tracks_x, tracks_y, tracks_d, tracks_c = file.trackdata_subset[:, [0, 1, 2, 3]].T
-	return tracks_x, tracks_y, tracks_d, tracks_c
+		raise ValueError("the file is empty")
+	headers = [X, Y, D, C]
+	columns = {header: file.trackdata_subset[:, i] for i, header in enumerate(headers)}
+	return DataFrame(columns)
 
 
 def parse_particle(code: str) -> tuple[str, float]:
-	if particle.lower().startswith("p"):
+	if code.lower().startswith("p"):
 		mass = 1
-	elif particle.lower().startswith("d"):
+	elif code.lower().startswith("d"):
 		mass = 2
-	elif particle.lower().startswith("t"):
+	elif code.lower().startswith("t"):
 		mass = 3
-	elif particle.lower().startswith("a"):
+	elif code.lower().startswith("a"):
 		mass = 1/2
 	else:
 		try:
-			mass = float(particle)
+			mass = float(code)
 		except ValueError:
-			raise ValueError(f"Unrecognized charged particle: '{particle}'")
+			raise ValueError(f"Unrecognized charged particle: '{code}'")
 
 	if round(mass, 1) == 0.5:
 		name = "Alpha"
@@ -166,14 +178,30 @@ def parse_particle(code: str) -> tuple[str, float]:
 	return name, mass
 
 
-def choose_signal_region(x_list: NDArray[float], d_list: NDArray[float]
-                         ) -> tuple[Callable[[NDArray[float]], NDArray[float]], Callable[[NDArray[float]], NDArray[float]]]:
-	left, right = np.min(x_list), np.max(x_list)
+def in_rectangle(data: DataFrame,
+                 x_min: float, x_max: float, y_min: float, y_max: float) -> NDArray[bool]:
+	return (data[X] >= x_min) & (data[X] <= x_max) & \
+	       (data[Y] >= y_min) & (data[Y] <= y_max)
+
+
+def calculate_background(data: DataFrame) -> DataArray:
+	d_bin_edges = get_bin_edges(D, data[D])
+	c_bin_edges = get_bin_edges(C, data[C])
+	counts, _, _ = np.histogram2d(data[D], data[C], bins=(d_bin_edges, c_bin_edges))
+	counts = xr.DataArray(counts, dims=(D, C), coords={D: d_bin_edges[0:-1], C: c_bin_edges[0:-1]})
+	area = (BACKGROUND_REGION[1] - BACKGROUND_REGION[0]) * \
+	       (BACKGROUND_REGION[3] - BACKGROUND_REGION[2])
+	return counts/area
+
+
+def choose_signal_region(tracks: DataFrame, background: DataArray,
+                         ) -> tuple[list["Point"], list["Point"]]:
+	left, right = tracks[X].min(), tracks[X].max()
 
 	fig = plt.figure(1)
-	histogram2d("x (cm)", x_list, "Track diameter (μm)", d_list,
-	            "click on the plot to select the minimum and maximum diameter, "
-	            "then close this window.")
+	plot_2d_histogram(tracks, X, D,
+	                  "click on the plot to select the minimum and maximum diameter, "
+	                  "then close this window.", background)
 	lines = [plt.plot([], [], "k-")[0], plt.plot([], [], "k-")[0]]
 	cursor, = plt.plot([], [], "ko")
 	# if default is not None:
@@ -196,10 +224,10 @@ def choose_signal_region(x_list: NDArray[float], d_list: NDArray[float]
 			else:
 				# determine whether they are continuing a line or starting a new one
 				if len(cuts) == 0 or event.xdata < cuts[-1][-1].x:
-					cuts.append([])
-				if len(cuts) > 2:
-					raise ValueError("there should only be two lines: one above the signal and one "
-					                 "below.")
+					if len(cuts) < 2:
+						cuts.append([])
+					else:
+						event.xdata = cuts[-1][-1].x
 				# either way, save the recent click as a new point
 				cuts[-1].append(Point(event.xdata, event.ydata))
 			# then update the plot
@@ -209,11 +237,11 @@ def choose_signal_region(x_list: NDArray[float], d_list: NDArray[float]
 			for cut, line in zip(cuts, lines):
 				line.set_visible(True)
 				line.set_xdata([left] + [point.x for point in cut] + [right])
-				line.set_ydata([cut[0].y] + [point.y for point in cut] + [cut[-1].y])
+				line.set_ydata([cut[0].d] + [point.d for point in cut] + [cut[-1].d])
 			if len(cuts) >= 1:
 				cursor.set_visible(True)
 				cursor.set_xdata([cuts[-1][-1].x])
-				cursor.set_ydata([cuts[-1][-1].y])
+				cursor.set_ydata([cuts[-1][-1].d])
 			else:
 				cursor.set_visible(False)
 	fig.canvas.mpl_connect('button_press_event', on_click)
@@ -223,53 +251,123 @@ def choose_signal_region(x_list: NDArray[float], d_list: NDArray[float]
 
 	# once the user is done, process the results into interpolator functions
 	if len(cuts) < 1:
-		cuts.append([Point(0, np.max(d_list))])
+		cuts.append([Point(0, tracks[D].max())])
 	if len(cuts) < 2:
 		cuts.append([Point(0, 0)])
-	cuts = sorted(cuts, key=lambda line: line[0].y)
-	interpolators = []
+	cuts = sorted(cuts, key=lambda line: line[0].d)
 	for cut in cuts:
-		cut = [Point(left, cut[0].y)] + cut + [Point(right, cut[-1].y)]
-		interpolators.append(interpolate.interp1d([point.x for point in cut],
-		                                          [point.y for point in cut],
-		                                          bounds_error=False))
-	return interpolators[0], interpolators[1]
+		cut.insert(0, Point(left, cut[0].d))
+		cut.insert(-1, Point(right, cut[-1].d))
+	return cuts[0], cuts[1]
 
 
-def infer_spectrum(x_list: NDArray[float], calibration: "CPS", particle: str
+def apply_diagonal_cuts(data: DataFrame, minimum_diameter: list["Point"],
+                        maximum_diameter: list["Point"]) -> NDArray[bool]:
+	minimum_diameter_at = interpolate.interp1d([p.x for p in minimum_diameter],
+	                                           [p.d for p in minimum_diameter], bounds_error=False)
+	maximum_diameter_at = interpolate.interp1d([p.x for p in maximum_diameter],
+	                                           [p.d for p in maximum_diameter], bounds_error=False)
+	return (data[D] >= minimum_diameter_at(data[X])) & (data[D] <= maximum_diameter_at(data[X]))
+
+
+def get_bin_edges(label: str, values: NDArray[float]) -> NDArray[float]:
+	minimum, maximum = np.min(values), np.max(values)
+	if "(%)" in label:
+		bin_width, num_bins, quantized = 1, None, True
+	elif "(cm)" in label:
+		bin_width, num_bins, quantized = .03, None, False
+	elif "(μm)" in label:
+		bin_width, num_bins, quantized = None, min(80, floor((maximum - minimum)/.1)), False
+	else:
+		bin_width, num_bins, quantized = None, 80, False
+	if quantized:
+		return np.arange(-0.5, maximum/bin_width + 1)*bin_width
+	else:
+		if num_bins is None:
+			num_bins = round((maximum - minimum)/bin_width)
+		return np.linspace(minimum, maximum, num_bins + 1)
+
+
+def infer_spectrum(data: DataFrame, calibration: "CPS", background: DataArray,
+                   min_diameter: list["Point"], max_diameter: list["Point"],
                    ) -> tuple[NDArray[float], NDArray[float], NDArray[float]]:
-	efficiency = (MAX_Y - MIN_Y)*calibration.slit_width/(4*pi*calibration.slit_distance**2)
-	energy_bins = np.linspace(np.min(calibration.nominal_energy),
-	                          np.max(calibration.nominal_energy),
-	                          ceil(sqrt(x_list.size)))
-	x_bins = np.interp(energy_bins, calibration.nominal_energy, calibration.x)
-	counts, _ = np.histogram(x_list, x_bins)
-	errors = np.sqrt(counts + 1)
-	return energy_bins, counts/efficiency, errors/efficiency
+	# calculate the scalar prefactor
+	slit_height = DATA_REGION[1] - DATA_REGION[0]
+	efficiency = slit_height*calibration.slit_width/(4*pi*calibration.slit_distance**2)
+
+	# compute the x bins by converting from energy bins
+	energy_bin_edges = np.linspace(np.min(calibration.nominal_energy),
+	                               np.max(calibration.nominal_energy),
+	                               ceil(sqrt(len(data))))
+	x_bin_edges = np.interp(energy_bin_edges, calibration.nominal_energy, calibration.x)
+
+	# do the histogramming using the x bins
+	counts, _ = np.histogram(data[X], x_bin_edges)
+	errors = np.sqrt(counts + 1)  # TODO: this doesn't account for uncertainty in the background
+
+	# arrange the background array's dimensions as needed and do the background subtraction
+	for dim in SPACIAL_DIMS:
+		if dim != X:
+			background = background*(data[dim].max() - data[dim].min())  # TODO: it would be better to store the range information from when we made the cuts
+	for dim in background.dims:
+		if dim != D:
+			background = background.sum(dim=dim)
+	d_bins = background.coords[D]
+	#  do a little numerical integral to see how much diameter from each bin falls within the d cuts
+	binned_background = np.zeros(counts.shape)
+	offsets = np.arange(0.5, 6)/6
+	for dx in offsets:
+		for dd in offsets:
+			d = DataArray(
+				d_bins + dd*(d_bins[1] - d_bins[0]), dims=(D,))
+			x = DataArray(
+				x_bin_edges[0:-1] + dx*(x_bin_edges[1:] - x_bin_edges[0:-1]), dims=(X,))
+			d_min = DataArray(
+				np.interp(x, [p.x for p in min_diameter], [p.d for p in min_diameter]), dims=(X,))
+			d_max = DataArray(
+				np.interp(x, [p.x for p in max_diameter], [p.d for p in max_diameter]), dims=(X,))
+			signal = (d >= d_min) & (d <= d_max)
+			binned_background += xr.where(signal, background, 0).sum(dim=D)/offsets.size**2
+	counts = counts - binned_background
+
+	return energy_bin_edges, counts/efficiency, errors/efficiency
 
 
-def histogram2d(x_label: str, x_values: NDArray[float], y_label: str, y_values: NDArray[float],
-                title: str, log_scale=False) -> None:
-	spacial_image = "(cm)" in x_label and "(cm)" in y_label
-	bins = []
-	for label, values in [(x_label, x_values), (y_label, y_values)]:
-		minimum, maximum = np.min(values), np.max(values)
-		if "(%)" in label:
-			bin_width, bin_number, quantized = 1, None, True
-		elif "(cm)" in label:
-			bin_width, bin_number, quantized = .03, None, False
-		elif "(μm)" in label:
-			bin_width, bin_number, quantized = None, min(80, floor((maximum - minimum)/.1)), False
-		else:
-			bin_width, bin_number, quantized = None, 80, False
-		if quantized:
-			bins.append(np.arange(floor(minimum/bin_width),
-			                      floor(maximum/bin_width) + 2)*bin_width)
-		else:
-			if bin_number is None:
-				bin_number = round((maximum - minimum)/bin_width)
-			bins.append(np.linspace(minimum, maximum, bin_number + 1))
-	counts, _, _ = np.histogram2d(x_values, y_values, bins=bins)
+def plot_rectangle(x_min: float, x_max: float, y_min: float, y_max: float, *,
+                   label: Optional[str] = None) -> None:
+	plt.plot([x_min, x_max, x_max, x_min, x_min],
+	         [y_min, y_min, y_max, y_max, y_min], "k")
+	if label is not None:
+		plt.text((x_min + x_max)/2, (y_min + y_max)/2, label)
+
+
+def plot_2d_histogram(data: DataFrame, x_label: str, y_label: str, title: str,
+                      background: Optional[DataArray] = None, log_scale=False) -> None:
+	# set up the binning
+	spacial_image = x_label in SPACIAL_DIMS and y_label in SPACIAL_DIMS
+	x_bin_edges = get_bin_edges(x_label, data[x_label])
+	y_bin_edges = get_bin_edges(y_label, data[y_label])
+
+	# compute the histogram
+	counts = xr.DataArray(
+		np.histogram2d(data[x_label], data[y_label], bins=(x_bin_edges, y_bin_edges))[0],
+		dims=(x_label, y_label))
+
+	# subtract the background...
+	if background is not None:
+		for dim in background.dims:
+			if dim != x_label and dim != y_label:
+				background = background.sum(dim=dim)
+		for dim in SPACIAL_DIMS:
+			if dim == x_label:
+				background = background*(x_bin_edges[1] - x_bin_edges[0])
+			elif dim == y_label:
+				background = background*(y_bin_edges[1] - y_bin_edges[0])
+			else:
+				background = background*(data[dim].max() - data[dim].min())
+		counts -= background
+
+	# set up the limits
 	vmax = np.quantile(counts, .999)
 	if log_scale and vmax > 1e3:
 		norm = colors.SymLogNorm(
@@ -278,10 +376,12 @@ def histogram2d(x_label: str, x_values: NDArray[float], y_label: str, y_values: 
 		)
 	else:
 		norm = colors.Normalize(vmin=0, vmax=vmax)
+
+	# make the plot
 	plt.imshow(counts.T,
 	           extent=(
-	               np.min(x_values), np.max(x_values),
-	               np.min(y_values), np.max(y_values)
+		           data[x_label].min(), data[x_label].max(),
+		           data[y_label].min(), data[y_label].max(),
 	           ),
 	           aspect="equal" if spacial_image else "auto",
 	           norm=norm,
@@ -293,21 +393,21 @@ def histogram2d(x_label: str, x_values: NDArray[float], y_label: str, y_values: 
 	plt.tight_layout()
 
 
-def bar_plot(x_label: str, bar_edges: NDArray[float],
-             y_label: str, bar_heights: NDArray[float], bar_errors: NDArray[float]) -> None:
+def plot_bars(x_label: str, bar_edges: NDArray[float],
+              y_label: str, bar_heights: NDArray[float], bar_errors: NDArray[float]) -> None:
 	x = np.repeat(bar_edges, 2)[1:-1]
 	y = np.repeat(bar_heights, 2)
 	plt.plot(x, y, "k-", linewidth=1)
 	bar_centers = (bar_edges[:-1] + bar_edges[1:])/2
-	plt.errorbar(x=bar_centers, y=bar_heights, yerr=bar_errors, fmt="k-", linewidth=1)
+	plt.errorbar(x=bar_centers, y=bar_heights, yerr=bar_errors, ecolor="k", elinewidth=1, fmt="none")
 	plt.xlabel(x_label)
 	plt.ylabel(y_label)
 
 
 class Point:
-	def __init__(self, x: float, y: float):
+	def __init__(self, x: float, d: float):
 		self.x = x
-		self.y = y
+		self.d = d
 
 
 class CPS:
