@@ -84,6 +84,10 @@ def main(cps1_finger: str, cps2_finger: str, particle: str, directory: str) -> N
 			# plot the results
 			plt.figure()
 			plot_bars(f"{particle_name} energy (MeV)", energy, "Spectrum (MeV^-1)", spectrum, spectrum_error)
+
+			# save the data, and also the most recent figure
+			save_spectrum(energy, spectrum, spectrum_error, particle_name, directory, filename[:-4])
+
 			plt.show()
 
 
@@ -402,6 +406,15 @@ def plot_bars(x_label: str, bar_edges: NDArray[float],
 	plt.errorbar(x=bar_centers, y=bar_heights, yerr=bar_errors, ecolor="k", elinewidth=1, fmt="none")
 	plt.xlabel(x_label)
 	plt.ylabel(y_label)
+
+
+def save_spectrum(energy: NDArray[float], spectrum: NDArray[float], error: NDArray[float],
+                  particle: str, directory, filename: str) -> None:
+	dataframe = DataFrame({f"{particle} energy (MeV)": (energy[0:-1] + energy[1:])/2,
+	                       "Spectrum (MeV^-1)": spectrum,
+	                       "Spectrum error (MeV^-1)": error})
+	dataframe.to_csv(os.path.join(directory, filename + "_spectrum.csv"), index=False)
+	plt.savefig(os.path.join(directory, filename + "_spectrum.png"), dpi=300)
 
 
 class Point:
