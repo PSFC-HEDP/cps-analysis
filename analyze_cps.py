@@ -21,10 +21,9 @@ from cmap import CMAP
 
 SLIT_WIDTH = .2  # (cm)
 
-BACKGROUND_REGION = (-1.5, 1.5, 1.0, 1.5)  # x_min, x_max, y_min, y_max (cm)
 DATA_REGION = (-1.2, 0.9)  # y_min, y_max (cm)
 
-MAX_CONTRAST = 35  # (%)
+MAX_CONTRAST = 20  # (%)
 MAX_ECCENTRICITY = 15  # (%)
 MAX_DIAMETER = 25  # (μm)
 
@@ -52,26 +51,21 @@ def main(cps1_finger: str, cps2_finger: str, particle: str, directory: str) -> N
 
 			# load the tracks from the cpsa file
 			tracks = load_tracks(directory, filename)
+			data = in_rectangle(tracks, left, right, *DATA_REGION)
 
-			# plot the data
-			plt.figure()
-			plot_2d_histogram(tracks, X, Y, filename[:-4])
-			plot_rectangle(*BACKGROUND_REGION, label="Background region")
-			plot_rectangle(left, right, *DATA_REGION, label="Signal region")
-			plt.show()
-
-			# compute the spacial cuts
-			background_region = in_rectangle(tracks, *BACKGROUND_REGION)
-			data_region = in_rectangle(tracks, left, right, *DATA_REGION)
-
-			# calculate the background
-			background = calculate_background(tracks[background_region])
+			# ask the user about the background region
+			background_region = choose_background_region(tracks, left, right, *DATA_REGION)
+			background = calculate_background(tracks, *background_region)
 
 			# ask the user about the diameter cuts
-			min_diameter_cut, max_diameter_cut = choose_signal_region(tracks[data_region], background)
-			signal = data_region & apply_diagonal_cuts(tracks, min_diameter_cut, max_diameter_cut)
+			min_diameter_cut, max_diameter_cut = choose_diameter_cuts(tracks[data], background)
+			signal = data & apply_diagonal_cuts(tracks, min_diameter_cut, max_diameter_cut)
 
 			# plot the cleaned-up data
+			plt.figure()
+			plot_2d_histogram(tracks, X, Y, filename[:-4])
+			plot_rectangle(*background_region, label="Background")
+			plot_rectangle(left, right, *DATA_REGION, label="Data")
 			plt.figure()
 			plot_2d_histogram(tracks[signal], D, C, filename[:-4], background, log_scale=True)
 			plt.figure()
@@ -187,23 +181,67 @@ def parse_particle(code: str) -> tuple[str, float]:
 	return name, mass
 
 
-def in_rectangle(data: DataFrame,
-                 x_min: float, x_max: float, y_min: float, y_max: float) -> NDArray[bool]:
-	return (data[X] >= x_min) & (data[X] <= x_max) & \
-	       (data[Y] >= y_min) & (data[Y] <= y_max)
-
-
-def calculate_background(data: DataFrame) -> DataArray:
+def calculate_background(data: DataFrame, left: float, right: float, bottom: float, top: float) -> DataArray:
+	data = data[in_rectangle(data, left, right, bottom, top)]
 	d_bin_edges = get_bin_edges(D, data[D])
 	c_bin_edges = get_bin_edges(C, data[C])
 	counts, _, _ = np.histogram2d(data[D], data[C], bins=(d_bin_edges, c_bin_edges))
 	counts = DataArray(counts, dims=(D, C), coords={D: d_bin_edges[0:-1], C: c_bin_edges[0:-1]})
-	area = (BACKGROUND_REGION[1] - BACKGROUND_REGION[0]) * \
-	       (BACKGROUND_REGION[3] - BACKGROUND_REGION[2])
+	area = (right - left) * (top - bottom)
 	return counts/area
 
 
-def choose_signal_region(tracks: DataFrame, background: DataArray,
+def in_rectangle(data: DataFrame,
+                 left: float, right: float, bottom: float, top: float) -> NDArray[bool]:
+	return (data[X] >= left) & (data[X] <= right) & \
+	       (data[Y] >= bottom) & (data[Y] <= top)
+
+
+def choose_background_region(tracks: DataFrame, data_left: float, data_right: float,
+                             data_bottom: float, data_top: float) -> tuple[float, float, float, float]:
+	fig = plt.figure("selection")
+	plot_2d_histogram(tracks, X, Y, "click to set the vertices of the background region rectangle")
+	plot_rectangle(data_left, data_right, data_bottom, data_top, label="Data region")
+	points, = plt.plot([], [], "ko")
+	rectangle, = plt.plot([], [], "k-")
+
+	vertices: list[Point] = []
+
+	def on_click(event: MouseEvent):
+		# whenever the user clicks...
+		if type(event) is MouseEvent and event.xdata is not None:
+			# if it's a right-click, delete a point
+			if event.button == MouseButton.RIGHT:
+				if len(vertices) > 0:
+					vertices.pop()
+			# otherwise, save a new point
+			elif len(vertices) < 2:
+				vertices.append(Point(event.xdata, max(event.ydata, DATA_REGION[1] + .1)))
+			# then update the plot
+			points.set_xdata([vertex.x for vertex in vertices])
+			points.set_ydata([vertex.y for vertex in vertices])
+			if len(vertices) >= 2:
+				rectangle.set_visible(True)
+				a, b = vertices[:2]
+				rectangle.set_xdata([a.x, b.x, b.x, a.x, a.x])
+				rectangle.set_ydata([a.y, a.y, b.y, b.y, a.y])
+			else:
+				rectangle.set_visible(False)
+	fig.canvas.mpl_connect('button_press_event', on_click)
+
+	while plt.fignum_exists("selection"):
+		plt.pause(.1)
+	if len(vertices) != 2:
+		raise ValueError("you didn't specify both corners of the rectangle.")
+
+	# once the user is done, arrange the results
+	a, b = vertices
+	left, right = min(a.x, b.x), max(a.x, b.x)
+	bottom, top = min(a.y, b.y), max(a.y, b.y)
+	return left, right, bottom, top
+
+
+def choose_diameter_cuts(tracks: DataFrame, background: DataArray,
                          ) -> tuple[list["Point"], list["Point"]]:
 	left, right = tracks[X].min(), tracks[X].max()
 
@@ -222,7 +260,7 @@ def choose_signal_region(tracks: DataFrame, background: DataArray,
 
 	def on_click(event: MouseEvent):
 		# whenever the user clicks...
-		if type(event) is MouseEvent:
+		if type(event) is MouseEvent and event.xdata is not None:
 			# if it's a right-click, delete a point
 			if event.button == MouseButton.RIGHT:
 				if len(cuts) > 0:
@@ -240,17 +278,16 @@ def choose_signal_region(tracks: DataFrame, background: DataArray,
 				# either way, save the recent click as a new point
 				cuts[-1].append(Point(event.xdata, event.ydata))
 			# then update the plot
-			# default_cuts.set_visible(False)
 			for line in lines:
 				line.set_visible(False)
 			for cut, line in zip(cuts, lines):
 				line.set_visible(True)
 				line.set_xdata([left] + [point.x for point in cut] + [right])
-				line.set_ydata([cut[0].d] + [point.d for point in cut] + [cut[-1].d])
+				line.set_ydata([cut[0].y] + [point.y for point in cut] + [cut[-1].y])
 			if len(cuts) >= 1:
 				cursor.set_visible(True)
 				cursor.set_xdata([cuts[-1][-1].x])
-				cursor.set_ydata([cuts[-1][-1].d])
+				cursor.set_ydata([cuts[-1][-1].y])
 			else:
 				cursor.set_visible(False)
 	fig.canvas.mpl_connect('button_press_event', on_click)
@@ -263,19 +300,19 @@ def choose_signal_region(tracks: DataFrame, background: DataArray,
 		cuts.append([Point(0, tracks[D].max())])
 	if len(cuts) < 2:
 		cuts.append([Point(0, 0)])
-	cuts = sorted(cuts, key=lambda line: line[0].d)
+	cuts = sorted(cuts, key=lambda line: line[0].y)
 	for cut in cuts:
-		cut.insert(0, Point(left, cut[0].d))
-		cut.append(Point(right, cut[-1].d))
+		cut.insert(0, Point(left, cut[0].y))
+		cut.append(Point(right, cut[-1].y))
 	return cuts[0], cuts[1]
 
 
 def apply_diagonal_cuts(data: DataFrame, minimum_diameter: list["Point"],
                         maximum_diameter: list["Point"]) -> NDArray[bool]:
 	minimum_diameter_at = interpolate.interp1d([p.x for p in minimum_diameter],
-	                                           [p.d for p in minimum_diameter], bounds_error=False)
+	                                           [p.y for p in minimum_diameter], bounds_error=False)
 	maximum_diameter_at = interpolate.interp1d([p.x for p in maximum_diameter],
-	                                           [p.d for p in maximum_diameter], bounds_error=False)
+	                                           [p.y for p in maximum_diameter], bounds_error=False)
 	return (data[D] >= minimum_diameter_at(data[X])) & (data[D] <= maximum_diameter_at(data[X]))
 
 
@@ -307,7 +344,7 @@ def infer_spectrum(data: DataFrame, calibration: "CPS", background: DataArray,
 	# compute the x bins by converting from energy bins
 	energy_bin_edges = np.linspace(np.min(calibration.nominal_energy),
 	                               np.max(calibration.nominal_energy),
-	                               ceil(sqrt(len(data))))
+	                               ceil(np.ptp(calibration.nominal_energy)*20))
 	x_bin_edges = DataArray(
 		np.interp(energy_bin_edges, calibration.nominal_energy, calibration.x), dims=(X,))
 
@@ -332,9 +369,9 @@ def infer_spectrum(data: DataFrame, calibration: "CPS", background: DataArray,
 			d = d_bins + dd*(d_bins[1] - d_bins[0])
 			x = x_bin_edges[0:-1] + dx*(x_bin_edges[1:] - x_bin_edges[0:-1])
 			d_min = DataArray(
-				np.interp(x, [p.x for p in min_diameter_cut], [p.d for p in min_diameter_cut]), dims=(X,))
+				np.interp(x, [p.x for p in min_diameter_cut], [p.y for p in min_diameter_cut]), dims=(X,))
 			d_max = DataArray(
-				np.interp(x, [p.x for p in max_diameter_cut], [p.d for p in max_diameter_cut]), dims=(X,))
+				np.interp(x, [p.x for p in max_diameter_cut], [p.y for p in max_diameter_cut]), dims=(X,))
 			signal = (d >= d_min) & (d <= d_max)
 			binned_background += xr.where(signal, background, 0).sum(dim=D)/offsets.size**2
 	counts = counts - binned_background
@@ -342,12 +379,12 @@ def infer_spectrum(data: DataFrame, calibration: "CPS", background: DataArray,
 	return energy_bin_edges, counts/efficiency, errors/efficiency
 
 
-def plot_rectangle(x_min: float, x_max: float, y_min: float, y_max: float, *,
+def plot_rectangle(left: float, right: float, bottom: float, top: float, *,
                    label: Optional[str] = None) -> None:
-	plt.plot([x_min, x_max, x_max, x_min, x_min],
-	         [y_min, y_min, y_max, y_max, y_min], "k")
+	plt.plot([left, right, right, left, left],
+	         [bottom, bottom, top, top, bottom], "k")
 	if label is not None:
-		plt.text((x_min + x_max)/2, (y_min + y_max)/2, label)
+		plt.text((left + right)/2, (bottom + top)/2, label)
 
 
 def plot_2d_histogram(data: DataFrame, x_label: str, y_label: str, title: str,
@@ -406,9 +443,9 @@ def plot_bars(x_label: str, bar_edges: NDArray[float],
               y_label: str, bar_heights: NDArray[float], bar_errors: NDArray[float]) -> None:
 	x = np.repeat(bar_edges, 2)[1:-1]
 	y = np.repeat(bar_heights, 2)
-	plt.plot(x, y, "k", linewidth=1.0)
+	plt.plot(x, y, "k", linewidth=0.7)
 	bar_centers = (bar_edges[:-1] + bar_edges[1:])/2
-	plt.errorbar(x=bar_centers, y=bar_heights, yerr=bar_errors, ecolor="k", elinewidth=1, fmt="none")
+	plt.errorbar(x=bar_centers, y=bar_heights, yerr=bar_errors, ecolor="k", elinewidth=0.7, fmt="none")
 	plt.xlim(np.min(bar_edges), np.max(bar_edges))
 	plt.xlabel(x_label)
 	plt.ylabel(y_label)
@@ -427,10 +464,10 @@ def save_spectrum(energy: NDArray[float], spectrum: NDArray[float], error: NDArr
 class Point:
 	def __init__(self, x: float, d: float):
 		self.x = x
-		self.d = d
+		self.y = d
 
 	def __str__(self) -> str:
-		return f"Point({self.x}, {self.d})"
+		return f"Point({self.x}, {self.y})"
 
 
 class CPS:
