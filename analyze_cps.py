@@ -37,6 +37,8 @@ D = "Track diameter (μm)"
 C = "Track contrast (%)"
 SPACIAL_DIMS = {X, Y}
 
+HIGHLIGHT_COLOR = "#C00000"
+
 
 def main(cps1_finger: str, cps2_finger: str, particle: str, directory: str) -> None:
 	for filename in os.listdir(directory):
@@ -51,6 +53,13 @@ def main(cps1_finger: str, cps2_finger: str, particle: str, directory: str) -> N
 			# load the tracks from the cpsa file
 			tracks = load_tracks(directory, filename)
 
+			# plot the data
+			plt.figure()
+			plot_2d_histogram(tracks, X, Y, filename[:-4])
+			plot_rectangle(*BACKGROUND_REGION, label="Background region")
+			plot_rectangle(left, right, *DATA_REGION, label="Signal region")
+			plt.show()
+
 			# compute the spacial cuts
 			background_region = in_rectangle(tracks, *BACKGROUND_REGION)
 			data_region = in_rectangle(tracks, left, right, *DATA_REGION)
@@ -59,14 +68,10 @@ def main(cps1_finger: str, cps2_finger: str, particle: str, directory: str) -> N
 			background = calculate_background(tracks[background_region])
 
 			# ask the user about the diameter cuts
-			min_diameter, max_diameter = choose_signal_region(tracks[data_region], background)
-			signal = data_region & apply_diagonal_cuts(tracks, min_diameter, max_diameter)
+			min_diameter_cut, max_diameter_cut = choose_signal_region(tracks[data_region], background)
+			signal = data_region & apply_diagonal_cuts(tracks, min_diameter_cut, max_diameter_cut)
 
-			# plot the data
-			plt.figure()
-			plot_2d_histogram(tracks, X, Y, filename[:-4])
-			plot_rectangle(*BACKGROUND_REGION, label="Background region")
-			plot_rectangle(left, right, *DATA_REGION, label="Signal region")
+			# plot the cleaned-up data
 			plt.figure()
 			plot_2d_histogram(tracks[signal], D, C, filename[:-4], background, log_scale=True)
 			plt.figure()
@@ -79,7 +84,7 @@ def main(cps1_finger: str, cps2_finger: str, particle: str, directory: str) -> N
 
 			# analyze the data
 			energy, spectrum, spectrum_error = infer_spectrum(
-				tracks[signal], calibration, background, min_diameter, max_diameter)
+				tracks[signal], calibration, background, min_diameter_cut, max_diameter_cut)
 
 			# plot the results
 			plt.figure()
@@ -192,7 +197,7 @@ def calculate_background(data: DataFrame) -> DataArray:
 	d_bin_edges = get_bin_edges(D, data[D])
 	c_bin_edges = get_bin_edges(C, data[C])
 	counts, _, _ = np.histogram2d(data[D], data[C], bins=(d_bin_edges, c_bin_edges))
-	counts = xr.DataArray(counts, dims=(D, C), coords={D: d_bin_edges[0:-1], C: c_bin_edges[0:-1]})
+	counts = DataArray(counts, dims=(D, C), coords={D: d_bin_edges[0:-1], C: c_bin_edges[0:-1]})
 	area = (BACKGROUND_REGION[1] - BACKGROUND_REGION[0]) * \
 	       (BACKGROUND_REGION[3] - BACKGROUND_REGION[2])
 	return counts/area
@@ -202,7 +207,7 @@ def choose_signal_region(tracks: DataFrame, background: DataArray,
                          ) -> tuple[list["Point"], list["Point"]]:
 	left, right = tracks[X].min(), tracks[X].max()
 
-	fig = plt.figure(1)
+	fig = plt.figure("selection")
 	plot_2d_histogram(tracks, X, D,
 	                  "click on the plot to select the minimum and maximum diameter, "
 	                  "then close this window.", background)
@@ -250,7 +255,7 @@ def choose_signal_region(tracks: DataFrame, background: DataArray,
 				cursor.set_visible(False)
 	fig.canvas.mpl_connect('button_press_event', on_click)
 
-	while plt.fignum_exists(1):
+	while plt.fignum_exists("selection"):
 		plt.pause(.1)
 
 	# once the user is done, process the results into interpolator functions
@@ -261,7 +266,7 @@ def choose_signal_region(tracks: DataFrame, background: DataArray,
 	cuts = sorted(cuts, key=lambda line: line[0].d)
 	for cut in cuts:
 		cut.insert(0, Point(left, cut[0].d))
-		cut.insert(-1, Point(right, cut[-1].d))
+		cut.append(Point(right, cut[-1].d))
 	return cuts[0], cuts[1]
 
 
@@ -274,7 +279,7 @@ def apply_diagonal_cuts(data: DataFrame, minimum_diameter: list["Point"],
 	return (data[D] >= minimum_diameter_at(data[X])) & (data[D] <= maximum_diameter_at(data[X]))
 
 
-def get_bin_edges(label: str, values: NDArray[float]) -> NDArray[float]:
+def get_bin_edges(label: str, values: NDArray[float]) -> DataArray:
 	minimum, maximum = np.min(values), np.max(values)
 	if "(%)" in label:
 		bin_width, num_bins, quantized = 1, None, True
@@ -289,11 +294,11 @@ def get_bin_edges(label: str, values: NDArray[float]) -> NDArray[float]:
 	else:
 		if num_bins is None:
 			num_bins = round((maximum - minimum)/bin_width)
-		return np.linspace(minimum, maximum, num_bins + 1)
+		return DataArray(np.linspace(minimum, maximum, num_bins + 1), dims=(label,))
 
 
 def infer_spectrum(data: DataFrame, calibration: "CPS", background: DataArray,
-                   min_diameter: list["Point"], max_diameter: list["Point"],
+                   min_diameter_cut: list["Point"], max_diameter_cut: list["Point"],
                    ) -> tuple[NDArray[float], NDArray[float], NDArray[float]]:
 	# calculate the scalar prefactor
 	slit_height = DATA_REGION[1] - DATA_REGION[0]
@@ -303,33 +308,33 @@ def infer_spectrum(data: DataFrame, calibration: "CPS", background: DataArray,
 	energy_bin_edges = np.linspace(np.min(calibration.nominal_energy),
 	                               np.max(calibration.nominal_energy),
 	                               ceil(sqrt(len(data))))
-	x_bin_edges = np.interp(energy_bin_edges, calibration.nominal_energy, calibration.x)
+	x_bin_edges = DataArray(
+		np.interp(energy_bin_edges, calibration.nominal_energy, calibration.x), dims=(X,))
 
 	# do the histogramming using the x bins
 	counts, _ = np.histogram(data[X], x_bin_edges)
 	errors = np.sqrt(counts + 1)  # TODO: this doesn't account for uncertainty in the background
 
 	# arrange the background array's dimensions as needed and do the background subtraction
-	for dim in SPACIAL_DIMS:
-		if dim != X:
-			background = background*(data[dim].max() - data[dim].min())  # TODO: it would be better to store the range information from when we made the cuts
 	for dim in background.dims:
 		if dim != D:
 			background = background.sum(dim=dim)
+	for dim in SPACIAL_DIMS:
+		if dim != X:
+			background = background*(data[dim].max() - data[dim].min())  # TODO: it would be better to store the range information from when we made the cuts
+	background = background*(x_bin_edges[1:] - x_bin_edges[0:-1])
 	d_bins = background.coords[D]
 	#  do a little numerical integral to see how much diameter from each bin falls within the d cuts
 	binned_background = np.zeros(counts.shape)
 	offsets = np.arange(0.5, 6)/6
 	for dx in offsets:
 		for dd in offsets:
-			d = DataArray(
-				d_bins + dd*(d_bins[1] - d_bins[0]), dims=(D,))
-			x = DataArray(
-				x_bin_edges[0:-1] + dx*(x_bin_edges[1:] - x_bin_edges[0:-1]), dims=(X,))
+			d = d_bins + dd*(d_bins[1] - d_bins[0])
+			x = x_bin_edges[0:-1] + dx*(x_bin_edges[1:] - x_bin_edges[0:-1])
 			d_min = DataArray(
-				np.interp(x, [p.x for p in min_diameter], [p.d for p in min_diameter]), dims=(X,))
+				np.interp(x, [p.x for p in min_diameter_cut], [p.d for p in min_diameter_cut]), dims=(X,))
 			d_max = DataArray(
-				np.interp(x, [p.x for p in max_diameter], [p.d for p in max_diameter]), dims=(X,))
+				np.interp(x, [p.x for p in max_diameter_cut], [p.d for p in max_diameter_cut]), dims=(X,))
 			signal = (d >= d_min) & (d <= d_max)
 			binned_background += xr.where(signal, background, 0).sum(dim=D)/offsets.size**2
 	counts = counts - binned_background
@@ -353,7 +358,7 @@ def plot_2d_histogram(data: DataFrame, x_label: str, y_label: str, title: str,
 	y_bin_edges = get_bin_edges(y_label, data[y_label])
 
 	# compute the histogram
-	counts = xr.DataArray(
+	counts = DataArray(
 		np.histogram2d(data[x_label], data[y_label], bins=(x_bin_edges, y_bin_edges))[0],
 		dims=(x_label, y_label))
 
@@ -401,11 +406,13 @@ def plot_bars(x_label: str, bar_edges: NDArray[float],
               y_label: str, bar_heights: NDArray[float], bar_errors: NDArray[float]) -> None:
 	x = np.repeat(bar_edges, 2)[1:-1]
 	y = np.repeat(bar_heights, 2)
-	plt.plot(x, y, "k-", linewidth=1)
+	plt.plot(x, y, "k", linewidth=1.0)
 	bar_centers = (bar_edges[:-1] + bar_edges[1:])/2
 	plt.errorbar(x=bar_centers, y=bar_heights, yerr=bar_errors, ecolor="k", elinewidth=1, fmt="none")
+	plt.xlim(np.min(bar_edges), np.max(bar_edges))
 	plt.xlabel(x_label)
 	plt.ylabel(y_label)
+	plt.grid("on")
 
 
 def save_spectrum(energy: NDArray[float], spectrum: NDArray[float], error: NDArray[float],
@@ -422,6 +429,9 @@ class Point:
 		self.x = x
 		self.d = d
 
+	def __str__(self) -> str:
+		return f"Point({self.x}, {self.d})"
+
 
 class CPS:
 	def __init__(self, cps: int, finger: str, slit_distance: float, slit_width: float,
@@ -435,6 +445,9 @@ class CPS:
 		self.minimum_energy = minimum_energy
 		self.nominal_energy = nominal_energy
 		self.maximum_energy = maximum_energy
+
+	def __str__(self) -> str:
+		return f"CPS({self.cps}, {self.finger}, {self.slit_distance}, {self.slit_width}, ...)"
 
 
 if __name__ == "__main__":
