@@ -23,10 +23,10 @@
 
  You will be prompted to click on the plot to select the diameter limits.
  Each time you click, it will place a new point on the plot.
- To use diagonal diameter cuts, you'll want to click from left to right,
+ To use diagonal diameter cuts, you’ll want to click from left to right,
  drawing a line either above or below the signal region.
  Once you get to the right end, start clicking from the left again to place the limit on the other side.
- Pay attention to how the lines appear to make sure it's understanding you correctly.
+ Pay attention to how the lines appear to make sure it’s understanding you correctly.
  As before, you can right-click at any point to undo an action.
  Close the plot when the diameter cuts are satisfactory.
 
@@ -49,7 +49,7 @@
 
 ## Limitations
 
- The main limitation is that this script doesn't make it very easy for the user to go back and forth on their limits.
+ The main limitation is that this script doesn’t make it very easy for the user to go back and forth on their limits.
  Once you set a cut or highlight a region, it will automatically move onto the next question/piece.
  I hope that the fact that this program makes the data much easier to visualize than AnalyzeCR39
  mitigates this shortcoming somewhat. 
@@ -63,4 +63,7 @@
 ## Dependencies
 
  This program requires Peter Heuer’s CR39py libary.
- I’ll drop in some instructions for how to install that later.
+ It’s not on PyPI last I checked, but you can pip-install it using
+ ~~~bash
+ pip install git+https://github.com/pheuer/CR39py.git
+ ~~~
