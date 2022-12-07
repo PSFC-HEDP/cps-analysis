@@ -15,6 +15,7 @@ from scipy import optimize
 
 FIGURE_SIZE = (7.5, 4)
 HIGHLIGHT_COLOR = "#C00000"
+CATEGORICAL_COLORS = ["#406836", "#BA5662", "#1D4881"]
 
 
 def main(directory: str) -> None:
@@ -22,13 +23,16 @@ def main(directory: str) -> None:
 	spectra: dict[str, dict[int, tuple[Spectrum, str, str, str]]] = {}
 	for filename in os.listdir(directory):
 		if filename.endswith(".csv"):
-			cps_descriptor = re.search(r"cps(\d+)_?", filename.lower())
+			cps_descriptor = re.search(r"cps(\d+)_?", filename, re.IGNORECASE)
 			if cps_descriptor is not None:
 				cps = int(cps_descriptor.group(1))
-				shot = filename.lower().replace(cps_descriptor.group(0), "")
 			else:
 				cps = 0
-				shot = filename
+			shot_descriptor = re.search(r"O?\d{5,6}", filename, re.IGNORECASE)
+			if shot_descriptor is not None:
+				shot = shot_descriptor.group(0)
+			else:
+				shot = filename[:-4]
 			if shot not in spectra:
 				spectra[shot] = {}
 			try:
@@ -55,16 +59,18 @@ def main(directory: str) -> None:
 			plot_bars(spectrum, energy_label, spectrum_label)
 			plt.plot(spectrum.energy_bin_edges,
 			         gaussian_function(spectrum.energy_bin_edges, gaussian),
-			         HIGHLIGHT_COLOR, zorder=1)
+			         HIGHLIGHT_COLOR, zorder=2)
+			plt.title(filename)
 			annotate_plot(f"Total yield = {total_yield:.2e}\n"
 			              f"Peak yield = {gaussian.total:.2e}\n"
 			              f"Peak energy = {gaussian.mean:.2f} MeV\n"
 			              f"Peak width = {gaussian.sigma*2*sqrt(2*log(2)):.2f} MeV")
 			plt.tight_layout()
 
-			# save the data, and also the most recent figure
+			# save and display the figure
 			plt.savefig(os.path.join(directory, filename + ".png"),
 			            dpi=300, transparent=True)
+			plt.show()
 
 		# add in an overlaid plot if there are a few of these
 		if len(spectra[shot]) > 1:
@@ -72,10 +78,11 @@ def main(directory: str) -> None:
 			energy_minima, energy_maxima = [], []
 			for cps, (spectrum, energy_label, spectrum_label, _) in spectra[shot].items():
 				plot_bars(spectrum, energy_label, spectrum_label,
-				          color=f"C{cps}", label=f"CPS{cps}")
+				          color=CATEGORICAL_COLORS[cps], label=f"CPS{cps}")
 				energy_minima.append(spectrum.energy_bin_edges[0])
 				energy_maxima.append(spectrum.energy_bin_edges[-1])
-			plt.xlim(min(energy_minima), max(energy_maxima))
+			plt.legend()
+			plt.xlim(max(energy_minima), min(energy_maxima))
 			plt.tight_layout()
 			plt.savefig(os.path.join(directory, shot + "_spectra.png"))
 
@@ -113,8 +120,8 @@ def downsample(spectrum: "Spectrum") -> "Spectrum":
 	factor = max(1, round(sqrt(typical_error/typical_value/.05)))
 	indices = np.reshape(np.arange(floor(spectrum.values.size/factor)*factor), (-1, factor))
 	return Spectrum(spectrum.energy_bin_edges[0::factor],
-	                spectrum.values[indices].sum(axis=1),
-	                (spectrum.errors[indices]**2).sum(axis=1)**(1/2))
+	                spectrum.values[indices].mean(axis=1),
+	                (spectrum.errors[indices]**-2).sum(axis=1)**(-1/2))
 
 
 def choose_limits(spectrum: "Spectrum", x_label: str, y_label: str) -> tuple[float, float]:
@@ -124,7 +131,7 @@ def choose_limits(spectrum: "Spectrum", x_label: str, y_label: str) -> tuple[flo
 	plt.tight_layout()
 	lines = [plt.plot([], [], "k--")[0], plt.plot([], [], "k--")[0]]
 	curve, = plt.plot(spectrum.energy_bin_edges, np.zeros_like(spectrum.energy_bin_edges),
-	                  HIGHLIGHT_COLOR, zorder=1)
+	                  HIGHLIGHT_COLOR, zorder=2)
 	curve.set_visible(False)
 
 	limits: list[float] = []
@@ -195,10 +202,10 @@ def plot_bars(spectrum: "Spectrum", x_label: str, y_label: str,
               color: str = "k", label: Optional[str] = None) -> None:
 	x = np.repeat(spectrum.energy_bin_edges, 2)[1:-1]
 	y = np.repeat(spectrum.values, 2)
-	plt.plot(x, y, color, linewidth=0.7, zorder=2, label=label)
+	plt.plot(x, y, color, linewidth=0.7, zorder=3, label=label)
 	energy_bin_centers = (spectrum.energy_bin_edges[:-1] + spectrum.energy_bin_edges[1:])/2
 	plt.errorbar(x=energy_bin_centers, y=spectrum.values, yerr=spectrum.errors,
-	             ecolor="k", elinewidth=0.7, fmt="none")
+	             ecolor=color, elinewidth=0.7, fmt="none")
 	plt.xlim(spectrum.energy_bin_edges[0], spectrum.energy_bin_edges[-1])
 	plt.xlabel(x_label)
 	plt.ylabel(y_label)
@@ -206,7 +213,7 @@ def plot_bars(spectrum: "Spectrum", x_label: str, y_label: str,
 
 
 def annotate_plot(text: str) -> None:
-	text = plt.text(.99, .98, text, zorder=3,
+	text = plt.text(.99, .98, text, zorder=4,
 	                ha='right', va='top', transform=plt.gca().transAxes)
 	text.set_bbox(dict(facecolor='w', alpha=0.5, edgecolor="none"))
 

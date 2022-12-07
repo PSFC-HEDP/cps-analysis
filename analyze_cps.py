@@ -30,7 +30,7 @@ MAX_DIAMETER = 25  # (μm)
 BIN_SIZE = .05  # (MeV)
 
 CPS1_DISTANCE = 255  # (cm)
-CPS2_DISTANCE = 255  # (cm)
+CPS2_DISTANCE = 100  # (cm)
 
 X = "x (cm)"
 Y = "y (cm)"
