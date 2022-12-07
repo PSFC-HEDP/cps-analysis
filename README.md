@@ -1,18 +1,18 @@
 # cps-analysis
 
- Simple compand-line utility to extract charged particle spectra from CPS scans.
+ Simple command-line tool to extract mean energies and yields from CPS scans.
 
 ## How to use
 
- To run the basic, simply navigate to the root directory in the command line and call
+ To run the basic spectrum inference, simply navigate to the root directory in a command line and call
  ~~~bash
  python analyze_cps.py {cps1-finger} {cps2-finger} {particle} {path/to/files/}
  ~~~
- where `{cps1-finger}` stands for the CPS1 configuration (for example “b8w”),
- `{cps2-finger}` stands for the CPS2 configuration (for example “d9”),
- `{particle}` stands for the particle being measured or the A/Z^2 of the particle being measured (for example “d” or “2”)
+ where `{cps1-finger}` stands for the CPS1 configuration (for example “b5”),
+ `{cps2-finger}` stands for the CPS2 configuration (for example “d9w”),
+ `{particle}` stands for the particle being measured or the A/Z^2 of the particle being measured (for example “d” or “2.0”)
  and `{path/to/files/}` stands for the directory, absolute or relative, that contains the `.cpsa` files.
- If one of the CPS was not run, you may set its configuration to “none”.
+ If you only have files for one CPS, you may set the configuration of the other one to “none”.
 
  You will first be prompted to click on the plot to highlight the data region.
  This will generally be somewhere in the space above the indicated data region.
@@ -29,9 +29,12 @@
  Pay attention to how the lines appear to make sure it’s understanding you correctly.
  As before, you can right-click at any point to undo an action.
  Close the plot when the diameter cuts are satisfactory.
+ 
+ It will repeat this for every scan file in the given directory,
+ outputing a CSV containing the spectrum for each one.
 
- To extract yields, means, and plots from analyzed spectra,
- from the root directory, call the follow-up script
+ To then extract yields, means, and plots from the analyzed spectra,
+ call the follow-up script
  ~~~bash
  python analyze_spectra.py {path/to/files}
  ~~~
@@ -41,6 +44,12 @@
  This will prompt you to click on the plot to select limits for the peak.
  As before, you can right-click at any time to undo an action.
  Close the plot when the peak limits are satisfactory.
+ 
+ It will repeat this for every spectrum file in the given directory,
+ outputing a plot of each spectrum as a PNG,
+ with the yield, mean energy, and width written on the side.
+ Lmk if you want the output as EPS or something for whatever reason;
+ it's not that difficult a thing to add.
 
  This program isn’t as powerful as Fredrick’s AnalyzeCR39,
  so if you have a use case that doesn’t seem to be covered by the choices you’re given,
