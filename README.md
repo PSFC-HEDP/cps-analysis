@@ -67,3 +67,9 @@
  ~~~bash
  pip install git+https://github.com/pheuer/CR39py.git
  ~~~
+
+## To do
+
+ In the future, I would really like to have this also automatically compute ρR with error bars
+ using the fit mean energy and particle species.
+ But I haven't done that yet.
