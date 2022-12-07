@@ -1,7 +1,7 @@
 import os
 import re
 import sys
-from math import sqrt, floor, pi, log
+from math import sqrt, floor, pi, log, log10
 from typing import Union, Optional
 
 import numpy as np
@@ -13,6 +13,7 @@ from pandas.errors import ParserError
 from scipy import optimize
 
 
+FIGURE_SIZE = (7.5, 4)
 HIGHLIGHT_COLOR = "#C00000"
 
 
@@ -22,7 +23,7 @@ def main(directory: str) -> None:
 	for filename in os.listdir(directory):
 		if filename.endswith(".csv"):
 			cps_descriptor = re.search(r"cps(\d+)_?", filename.lower())
-			if cps_descriptor:
+			if cps_descriptor is not None:
 				cps = int(cps_descriptor.group(1))
 				shot = filename.lower().replace(cps_descriptor.group(0), "")
 			else:
@@ -50,23 +51,24 @@ def main(directory: str) -> None:
 			gaussian = fit_gaussian(spectrum, left, right)
 
 			# plot the results
-			plt.figure()
+			plt.figure(figsize=FIGURE_SIZE)
 			plot_bars(spectrum, energy_label, spectrum_label)
 			plt.plot(spectrum.energy_bin_edges,
 			         gaussian_function(spectrum.energy_bin_edges, gaussian),
 			         HIGHLIGHT_COLOR, zorder=1)
-			annotate_plot(f"Total yield = {total_yield}\n"
-			              f"Peak yield = {gaussian.total}\n"
-			              f"Peak energy = {gaussian.mean} MeV\n"
-			              f"Peak width = {gaussian.sigma*1e3*2*sqrt(2*log(2))} keV")
+			annotate_plot(f"Total yield = {total_yield:.2e}\n"
+			              f"Peak yield = {gaussian.total:.2e}\n"
+			              f"Peak energy = {gaussian.mean:.2f} MeV\n"
+			              f"Peak width = {gaussian.sigma*2*sqrt(2*log(2)):.2f} MeV")
+			plt.tight_layout()
 
 			# save the data, and also the most recent figure
-			plt.savefig(os.path.join(directory, filename[:-4] + "_spectrum.png"),
+			plt.savefig(os.path.join(directory, filename + ".png"),
 			            dpi=300, transparent=True)
 
 		# add in an overlaid plot if there are a few of these
 		if len(spectra[shot]) > 1:
-			plt.figure()
+			plt.figure(figsize=FIGURE_SIZE)
 			energy_minima, energy_maxima = [], []
 			for cps, (spectrum, energy_label, spectrum_label, _) in spectra[shot].items():
 				plot_bars(spectrum, energy_label, spectrum_label,
@@ -74,7 +76,8 @@ def main(directory: str) -> None:
 				energy_minima.append(spectrum.energy_bin_edges[0])
 				energy_maxima.append(spectrum.energy_bin_edges[-1])
 			plt.xlim(min(energy_minima), max(energy_maxima))
-			plt.savefig(os.path.join(directory, shot + "spectra.png"))
+			plt.tight_layout()
+			plt.savefig(os.path.join(directory, shot + "_spectra.png"))
 
 		plt.show()
 
@@ -115,9 +118,10 @@ def downsample(spectrum: "Spectrum") -> "Spectrum":
 
 
 def choose_limits(spectrum: "Spectrum", x_label: str, y_label: str) -> tuple[float, float]:
-	fig = plt.figure("selection")
+	fig = plt.figure("selection", figsize=FIGURE_SIZE)
 	plot_bars(spectrum, x_label, y_label)
 	plt.title("click to select the lower and upper bounds of the peak, then close this plot")
+	plt.tight_layout()
 	lines = [plt.plot([], [], "k--")[0], plt.plot([], [], "k--")[0]]
 	curve, = plt.plot(spectrum.energy_bin_edges, np.zeros_like(spectrum.energy_bin_edges),
 	                  HIGHLIGHT_COLOR, zorder=1)
@@ -202,7 +206,9 @@ def plot_bars(spectrum: "Spectrum", x_label: str, y_label: str,
 
 
 def annotate_plot(text: str) -> None:
-	plt.text(.99, .99, text, ha='right', va='top', transform=plt.gca().transAxes)
+	text = plt.text(.99, .98, text, zorder=3,
+	                ha='right', va='top', transform=plt.gca().transAxes)
+	text.set_bbox(dict(facecolor='w', alpha=0.5, edgecolor="none"))
 
 
 class InvalidFileError(Exception):
@@ -227,8 +233,17 @@ class Quantity:
 	def __mul__(self, other: float) -> "Quantity":
 		return Quantity(self.value*other, self.error*other)
 
-	def __str__(self) -> str:
-		return f"{self.value} ± {self.error}"
+	def __format__(self, format_spec: str) -> str:
+		# for "e", manage the exponent manually to make the value and error match
+		if "e" in format_spec:
+			exponent = floor(log10(self.value))
+			new_format_spec = format_spec.replace("e", "f")
+			return f"{format(self.value/10**exponent, new_format_spec)}e{exponent:+03d} ± " \
+			       f"{format(self.error/10**exponent, new_format_spec)}e{exponent:+03d}"
+		# otherwise just delegate tothe built-in format for each of the value and error
+		else:
+			return f"{format(self.value, format_spec)} ± " \
+			       f"{format(self.error, format_spec)}"
 
 
 class Gaussian:

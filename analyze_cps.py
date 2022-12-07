@@ -17,7 +17,7 @@ from pandas import DataFrame
 from scipy import interpolate
 from xarray import DataArray
 
-from analyze_spectra import plot_bars, Spectrum
+from analyze_spectra import plot_bars, Spectrum, FIGURE_SIZE
 from cmap import CMAP
 
 SLIT_WIDTH = .2  # (cm)
@@ -62,31 +62,33 @@ def main(cps1_finger: str, cps2_finger: str, particle: str, directory: str) -> N
 			signal = data & apply_diagonal_cuts(tracks, min_diameter_cut, max_diameter_cut)
 
 			# plot the cleaned-up data
-			plt.figure()
+			plt.figure(figsize=FIGURE_SIZE)
 			plot_2d_histogram(tracks, X, Y, filename[:-5])
 			plot_rectangle(*background_region, label="Background")
 			plot_rectangle(left, right, *DATA_REGION, label="Data")
-			plt.figure()
+			plt.tight_layout()
+			plt.figure(figsize=FIGURE_SIZE)
 			plot_2d_histogram(tracks[signal], D, C, filename[:-5], background, log_scale=True)
-			plt.figure()
+			plt.tight_layout()
+			plt.figure(figsize=FIGURE_SIZE)
 			plt.fill_between(calibration.x,
 			                 calibration.minimum_energy,
 			                 calibration.maximum_energy, alpha=.5)
 			plt.plot(calibration.x, calibration.nominal_energy)
 			plt.xlabel(X)
 			plt.ylabel(f"{particle_name} energy (MeV)")
+			plt.tight_layout()
 
-			# analyze the data
+			# analyze and save the data
 			energy, spectrum, spectrum_error = infer_spectrum(
 				tracks[signal], calibration, background, min_diameter_cut, max_diameter_cut)
+			save_spectrum(energy, spectrum, spectrum_error, particle_name, directory, filename[:-5])
 
 			# plot the results
-			plt.figure()
+			plt.figure(figsize=FIGURE_SIZE)
 			plot_bars(Spectrum(energy, spectrum, spectrum_error),
 			          f"{particle_name} energy (MeV)", "Spectrum (MeV^-1)")
-
-			# save the data, and also the most recent figure
-			save_spectrum(energy, spectrum, spectrum_error, particle_name, directory, filename[:-5])
+			plt.tight_layout()
 
 			plt.show()
 
@@ -199,9 +201,10 @@ def in_rectangle(data: DataFrame,
 
 def choose_background_region(tracks: DataFrame, data_left: float, data_right: float,
                              data_bottom: float, data_top: float) -> tuple[float, float, float, float]:
-	fig = plt.figure("selection")
-	plot_2d_histogram(tracks, X, Y, "click to set the vertices of the background region rectangle")
+	fig = plt.figure("selection", figsize=FIGURE_SIZE)
+	plot_2d_histogram(tracks, X, Y, "click to set the corners of the background region, then close this plot")
 	plot_rectangle(data_left, data_right, data_bottom, data_top, label="Data region")
+	plt.tight_layout()
 	points, = plt.plot([], [], "ko")
 	rectangle, = plt.plot([], [], "k-")
 
@@ -245,10 +248,11 @@ def choose_diameter_cuts(tracks: DataFrame, background: DataArray,
                          ) -> tuple[list["Point"], list["Point"]]:
 	left, right = tracks[X].min(), tracks[X].max()
 
-	fig = plt.figure("selection")
+	fig = plt.figure("selection", figsize=FIGURE_SIZE)
 	plot_2d_histogram(tracks, X, D,
 	                  "click on the plot to select the minimum and maximum diameter, "
 	                  "then close this window.", background)
+	plt.tight_layout()
 	lines = [plt.plot([], [], "k-")[0], plt.plot([], [], "k-")[0]]
 	cursor, = plt.plot([], [], "ko")
 	# if default is not None:
