@@ -344,7 +344,6 @@ def infer_spectrum(data: DataFrame, calibration: "CPS", background: DataArray,
 	# calculate the scalar prefactor
 	slit_height = DATA_REGION[1] - DATA_REGION[0]
 	efficiency = slit_height*calibration.slit_width/(4*pi*calibration.slit_distance**2)
-	print(len(data), "/", efficiency, "=", len(data)/efficiency)
 
 	# compute the x bins by converting from energy bins
 	energy_bin_edges = np.linspace(np.min(calibration.nominal_energy),
