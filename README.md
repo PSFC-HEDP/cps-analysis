@@ -57,6 +57,11 @@
  This analysis also currently assumes a slit width of 2mm.
  You will need to modify the script if you want to use it for 1mm.
 
+ I don't currently allow the user to set the data region,
+ so if part of the scan is bad there's no way to remove it.
+ I probably could make it so clicking after you set the background would do it...
+ but I haven't.
+
  Lastly, there is no provision for ramped background subtraction,
  so users will have to make do with flat background for now.
 

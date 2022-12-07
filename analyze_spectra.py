@@ -41,7 +41,7 @@ def main(directory: str) -> None:
 			except (ParserError, InvalidFileError):
 				print(f"I'm skipping {filename} because I can't read it.")
 				continue
-			spectra[shot][cps] = downsample(spectrum), energy_label, spectrum_label, filename[:-4]
+			spectra[shot][cps] = spectrum, energy_label, spectrum_label, filename[:-4]
 
 	# then go thru them by shot
 	for shot in sorted(spectra.keys()):
@@ -112,16 +112,6 @@ def load_spectrum(filepath: str) -> tuple["Spectrum", str, str]:
 		[energy_bins[-1] + bin_width/2]])
 
 	return Spectrum(energy_bin_edges, values, errors), energy_label, spectrum_label
-
-
-def downsample(spectrum: "Spectrum") -> "Spectrum":
-	typical_value = np.quantile(spectrum.values, .90)
-	typical_error = np.quantile(spectrum.errors, .90)
-	factor = max(1, round(sqrt(typical_error/typical_value/.05)))
-	indices = np.reshape(np.arange(floor(spectrum.values.size/factor)*factor), (-1, factor))
-	return Spectrum(spectrum.energy_bin_edges[0::factor],
-	                spectrum.values[indices].mean(axis=1),
-	                (spectrum.errors[indices]**-2).sum(axis=1)**(-1/2))
 
 
 def choose_limits(spectrum: "Spectrum", x_label: str, y_label: str) -> tuple[float, float]:

@@ -3,7 +3,7 @@
 import os
 import re
 import sys
-from math import log, floor, ceil, pi
+from math import log, floor, ceil, pi, sqrt
 from typing import Optional
 
 import matplotlib.pyplot as plt
@@ -20,7 +20,7 @@ from xarray import DataArray
 from analyze_spectra import plot_bars, Spectrum, FIGURE_SIZE
 from cmap import CMAP
 
-SLIT_WIDTH = .2  # (cm)
+SLIT_WIDTH = 2e-1  # (cm)
 
 DATA_REGION = (-1.2, 0.9)  # y_min, y_max (cm)
 
@@ -80,14 +80,14 @@ def main(cps1_finger: str, cps2_finger: str, particle: str, directory: str) -> N
 			plt.tight_layout()
 
 			# analyze and save the data
-			energy, spectrum, spectrum_error = infer_spectrum(
+			spectrum = infer_spectrum(
 				tracks[signal], calibration, background, min_diameter_cut, max_diameter_cut)
-			save_spectrum(energy, spectrum, spectrum_error, particle_name, directory, filename[:-5])
+			spectrum = downsample(spectrum)
+			save_spectrum(spectrum, particle_name, directory, filename[:-5])
 
 			# plot the results
 			plt.figure(figsize=FIGURE_SIZE)
-			plot_bars(Spectrum(energy, spectrum, spectrum_error),
-			          f"{particle_name} energy (MeV)", "Spectrum (MeV^-1)")
+			plot_bars(spectrum, f"{particle_name} energy (MeV)", "Spectrum (MeV^-1)")
 			plt.tight_layout()
 
 			plt.show()
@@ -340,20 +340,22 @@ def get_bin_edges(label: str, values: NDArray[float]) -> DataArray:
 
 def infer_spectrum(data: DataFrame, calibration: "CPS", background: DataArray,
                    min_diameter_cut: list["Point"], max_diameter_cut: list["Point"],
-                   ) -> tuple[NDArray[float], NDArray[float], NDArray[float]]:
+                   ) -> "Spectrum":
 	# calculate the scalar prefactor
 	slit_height = DATA_REGION[1] - DATA_REGION[0]
 	efficiency = slit_height*calibration.slit_width/(4*pi*calibration.slit_distance**2)
+	print(len(data), "/", efficiency, "=", len(data)/efficiency)
 
 	# compute the x bins by converting from energy bins
 	energy_bin_edges = np.linspace(np.min(calibration.nominal_energy),
 	                               np.max(calibration.nominal_energy),
 	                               ceil(np.ptp(calibration.nominal_energy)/BIN_SIZE))
+	energy_bin_width = energy_bin_edges[1] - energy_bin_edges[0]
 	x_bin_edges = DataArray(
 		np.interp(energy_bin_edges, calibration.nominal_energy, calibration.x), dims=(X,))
 
 	# do the histogramming using the x bins
-	counts, _ = np.histogram(data[X], x_bin_edges)
+	counts = DataArray(np.histogram(data[X], x_bin_edges)[0], dims=(X,))
 	errors = np.sqrt(counts + 1)  # TODO: this doesn't account for uncertainty in the background
 
 	# arrange the background array's dimensions as needed and do the background subtraction
@@ -380,7 +382,20 @@ def infer_spectrum(data: DataFrame, calibration: "CPS", background: DataArray,
 			binned_background += xr.where(signal, background, 0).sum(dim=D)/offsets.size**2
 	counts = counts - binned_background
 
-	return energy_bin_edges, counts/efficiency, errors/efficiency
+	spectral_density = counts/energy_bin_width/efficiency
+	spectral_error = errors/energy_bin_width/efficiency
+
+	return Spectrum(energy_bin_edges, spectral_density.to_numpy(), spectral_error.to_numpy())
+
+
+def downsample(spectrum: "Spectrum") -> "Spectrum":
+	typical_value = np.quantile(spectrum.values, .90)
+	typical_error = np.quantile(spectrum.errors, .90)
+	factor = max(1, round(sqrt(typical_error/typical_value/.05)))
+	indices = np.reshape(np.arange(floor(spectrum.values.size/factor)*factor), (-1, factor))
+	return Spectrum(spectrum.energy_bin_edges[0::factor],
+	                spectrum.values[indices].mean(axis=1),
+	                (spectrum.errors[indices]**-2).sum(axis=1)**(-1/2))
 
 
 def plot_rectangle(left: float, right: float, bottom: float, top: float, *,
@@ -443,11 +458,12 @@ def plot_2d_histogram(data: DataFrame, x_label: str, y_label: str, title: str,
 	plt.tight_layout()
 
 
-def save_spectrum(energy: NDArray[float], spectrum: NDArray[float], error: NDArray[float],
+def save_spectrum(spectrum: "Spectrum",
                   particle: str, directory, filename: str) -> None:
-	dataframe = DataFrame({f"{particle} energy (MeV)": (energy[0:-1] + energy[1:])/2,
-	                       "Spectrum (MeV^-1)": spectrum,
-	                       "Spectrum error (MeV^-1)": error})
+	energies = (spectrum.energy_bin_edges[0:-1] + spectrum.energy_bin_edges[1:])/2
+	dataframe = DataFrame({f"{particle} energy (MeV)": energies,
+	                       "Spectrum (MeV^-1)": spectrum.values,
+	                       "Spectrum error (MeV^-1)": spectrum.errors})
 	dataframe.to_csv(os.path.join(directory, filename + "_spectrum.csv"), index=False)
 
 
