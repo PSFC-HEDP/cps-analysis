@@ -3,7 +3,7 @@
 import os
 import re
 import sys
-from math import log, floor, ceil, pi, sqrt
+from math import log, floor, ceil, pi
 from typing import Optional
 
 import matplotlib.pyplot as plt
@@ -17,6 +17,7 @@ from pandas import DataFrame
 from scipy import interpolate
 from xarray import DataArray
 
+from analyze_spectra import plot_bars, Spectrum
 from cmap import CMAP
 
 SLIT_WIDTH = .2  # (cm)
@@ -26,6 +27,7 @@ DATA_REGION = (-1.2, 0.9)  # y_min, y_max (cm)
 MAX_CONTRAST = 20  # (%)
 MAX_ECCENTRICITY = 15  # (%)
 MAX_DIAMETER = 25  # (μm)
+BIN_SIZE = .05  # (MeV)
 
 CPS1_DISTANCE = 255  # (cm)
 CPS2_DISTANCE = 255  # (cm)
@@ -35,8 +37,6 @@ Y = "y (cm)"
 D = "Track diameter (μm)"
 C = "Track contrast (%)"
 SPACIAL_DIMS = {X, Y}
-
-HIGHLIGHT_COLOR = "#C00000"
 
 
 def main(cps1_finger: str, cps2_finger: str, particle: str, directory: str) -> None:
@@ -50,7 +50,7 @@ def main(cps1_finger: str, cps2_finger: str, particle: str, directory: str) -> N
 			left, right = np.min(calibration.x), np.max(calibration.x)
 
 			# load the tracks from the cpsa file
-			tracks = load_tracks(directory, filename)
+			tracks = load_tracks(os.path.join(directory, filename))
 			data = in_rectangle(tracks, left, right, *DATA_REGION)
 
 			# ask the user about the background region
@@ -63,11 +63,11 @@ def main(cps1_finger: str, cps2_finger: str, particle: str, directory: str) -> N
 
 			# plot the cleaned-up data
 			plt.figure()
-			plot_2d_histogram(tracks, X, Y, filename[:-4])
+			plot_2d_histogram(tracks, X, Y, filename[:-5])
 			plot_rectangle(*background_region, label="Background")
 			plot_rectangle(left, right, *DATA_REGION, label="Data")
 			plt.figure()
-			plot_2d_histogram(tracks[signal], D, C, filename[:-4], background, log_scale=True)
+			plot_2d_histogram(tracks[signal], D, C, filename[:-5], background, log_scale=True)
 			plt.figure()
 			plt.fill_between(calibration.x,
 			                 calibration.minimum_energy,
@@ -82,10 +82,11 @@ def main(cps1_finger: str, cps2_finger: str, particle: str, directory: str) -> N
 
 			# plot the results
 			plt.figure()
-			plot_bars(f"{particle_name} energy (MeV)", energy, "Spectrum (MeV^-1)", spectrum, spectrum_error)
+			plot_bars(Spectrum(energy, spectrum, spectrum_error),
+			          f"{particle_name} energy (MeV)", "Spectrum (MeV^-1)")
 
 			# save the data, and also the most recent figure
-			save_spectrum(energy, spectrum, spectrum_error, particle_name, directory, filename[:-4])
+			save_spectrum(energy, spectrum, spectrum_error, particle_name, directory, filename[:-5])
 
 			plt.show()
 
@@ -139,9 +140,8 @@ def load_calibration(filename: str, cps1_finger: str, cps2_finger: str, particle
 	return CPS(cps, finger, slit_distance, SLIT_WIDTH, x, energy[0, :], energy[1, :], energy[2, :])
 
 
-def load_tracks(directory: str, filename: str
-                ) -> DataFrame:
-	file = cr39.CR39(os.path.join(directory, filename))
+def load_tracks(filepath: str) -> DataFrame:
+	file = cr39.CR39(filepath)
 	file.add_cut(cr39.Cut(cmin=MAX_CONTRAST))
 	file.add_cut(cr39.Cut(emin=MAX_ECCENTRICITY))
 	file.add_cut(cr39.Cut(dmin=MAX_DIAMETER))
@@ -344,7 +344,7 @@ def infer_spectrum(data: DataFrame, calibration: "CPS", background: DataArray,
 	# compute the x bins by converting from energy bins
 	energy_bin_edges = np.linspace(np.min(calibration.nominal_energy),
 	                               np.max(calibration.nominal_energy),
-	                               ceil(np.ptp(calibration.nominal_energy)*20))
+	                               ceil(np.ptp(calibration.nominal_energy)/BIN_SIZE))
 	x_bin_edges = DataArray(
 		np.interp(energy_bin_edges, calibration.nominal_energy, calibration.x), dims=(X,))
 
@@ -439,26 +439,12 @@ def plot_2d_histogram(data: DataFrame, x_label: str, y_label: str, title: str,
 	plt.tight_layout()
 
 
-def plot_bars(x_label: str, bar_edges: NDArray[float],
-              y_label: str, bar_heights: NDArray[float], bar_errors: NDArray[float]) -> None:
-	x = np.repeat(bar_edges, 2)[1:-1]
-	y = np.repeat(bar_heights, 2)
-	plt.plot(x, y, "k", linewidth=0.7)
-	bar_centers = (bar_edges[:-1] + bar_edges[1:])/2
-	plt.errorbar(x=bar_centers, y=bar_heights, yerr=bar_errors, ecolor="k", elinewidth=0.7, fmt="none")
-	plt.xlim(np.min(bar_edges), np.max(bar_edges))
-	plt.xlabel(x_label)
-	plt.ylabel(y_label)
-	plt.grid("on")
-
-
 def save_spectrum(energy: NDArray[float], spectrum: NDArray[float], error: NDArray[float],
                   particle: str, directory, filename: str) -> None:
 	dataframe = DataFrame({f"{particle} energy (MeV)": (energy[0:-1] + energy[1:])/2,
 	                       "Spectrum (MeV^-1)": spectrum,
 	                       "Spectrum error (MeV^-1)": error})
 	dataframe.to_csv(os.path.join(directory, filename + "_spectrum.csv"), index=False)
-	plt.savefig(os.path.join(directory, filename + "_spectrum.png"), dpi=300)
 
 
 class Point:
@@ -515,7 +501,7 @@ if __name__ == "__main__":
 							raise ValueError(f"The `arguments.txt` file contains an unrecognized "
 							                 f"key: {key}")
 		except IOError:
-			raise ValueError("You must run this script with three command line arguments: "
+			raise ValueError("You must run this script with four command line arguments: "
 			                 "`python analyze_cps.py cps1-finger cps2-finger directory`; "
 			                 "or specify the arguments by creating a file called `arguments.txt` "
 			                 "formatted like\n"
@@ -525,7 +511,7 @@ if __name__ == "__main__":
 			raise ValueError("The `arguments.txt` file was missing some of the four required "
 			                 "arguments: cps1, cps2, key, and directory.")
 	else:
-		raise ValueError("You must run this script with exactly three command line arguments: "
+		raise ValueError("You must run this script with exactly four command line arguments: "
 		                 "`python analyze_cps.py cps1-finger cps2-finger directory`, "
 		                 "or alternatively specify the arguments by creating a file called "
 		                 "`arguments.txt` formatted like \n"

@@ -4,15 +4,22 @@
 
 ## How to use
 
- To run the analysis, simply navigate to the root directory in the command line and call
+ To run the basic, simply navigate to the root directory in the command line and call
  ~~~bash
- python analyze_cps.py {cps1-finger} {cps2-finger} {particle} path/to/files/
+ python analyze_cps.py {cps1-finger} {cps2-finger} {particle} {path/to/files/}
  ~~~
  where `{cps1-finger}` stands for the CPS1 configuration (for example “b8w”),
  `{cps2-finger}` stands for the CPS2 configuration (for example “d9”),
  `{particle}` stands for the particle being measured or the A/Z^2 of the particle being measured (for example “d” or “2”)
- and `path/to/files/` stands for the directory, absolute or relative, that contains the `.cpsa` files.
+ and `{path/to/files/}` stands for the directory, absolute or relative, that contains the `.cpsa` files.
  If one of the CPS was not run, you may set its configuration to “none”.
+
+ You will first be prompted to click on the plot to highlight the data region.
+ This will generally be somewhere in the space above the indicated data region.
+ You may specify any two diagonal corners of the rectangle in either order.
+ At any time, you may right-click to delete the most recently placed point.
+ When both points are set, the rectangle will be displayed for confirmation.
+ Close the plot at this point to continue.
 
  You will be prompted to click on the plot to select the diameter limits.
  Each time you click, it will place a new point on the plot.
@@ -20,7 +27,20 @@
  drawing a line either above or below the signal region.
  Once you get to the right end, start clicking from the left again to place the limit on the other side.
  Pay attention to how the lines appear to make sure it's understanding you correctly.
+ As before, you can right-click at any point to undo an action.
+ Close the plot when the diameter cuts are satisfactory.
 
+ To extract yields, means, and plots from analyzed spectra,
+ from the root directory, call the follow-up script
+ ~~~bash
+ python analyze_spectra.py {path/to/files}
+ ~~~
+ where `{path/to/files/}` stands for the directory, absolute or relative, that contains the `.cpsa` files.
+ If the directory is ommitted, the same directory used for the previous script will be assumed.
+
+ This will prompt you to click on the plot to select limits for the peak.
+ As before, you can right-click at any time to undo an action.
+ Close the plot when the peak limits are satisfactory.
 
  This program isn’t as powerful as Fredrick’s AnalyzeCR39,
  so if you have a use case that doesn’t seem to be covered by the choices you’re given,
