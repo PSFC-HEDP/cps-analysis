@@ -18,6 +18,12 @@
  pip install git+https://github.com/pheuer/CR39py.git
  ~~~
 
+ Random troubleshooting note just in case it’s relevant: if pip complains about fcntl,
+ that’s because you foolishly installed py2app.
+ Only Macs are allowed to install py2app. 
+ Get it off of your computer you disgusting heathen
+ because it’s basically a virus if you install it on Windows I guess?
+
 ## How to use
 
 ### Infer spectra
