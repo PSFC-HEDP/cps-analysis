@@ -84,12 +84,13 @@ def main(directory: str) -> None:
 			plt.legend()
 			plt.xlim(max(energy_minima), min(energy_maxima))
 			plt.tight_layout()
-			plt.savefig(os.path.join(directory, shot + "_spectra.png"))
+			plt.savefig(os.path.join(directory, shot + "_spectra.png"), transparent=True)
 
 		plt.show()
 
 
 def load_spectrum(filepath: str) -> tuple["Spectrum", str, str]:
+	""" load a spectrum previusly saved as a CSV file """
 	data = pd.read_csv(filepath)
 	energy_bins, values, errors = None, None, None
 	energy_label, spectrum_label = None, None
@@ -115,6 +116,7 @@ def load_spectrum(filepath: str) -> tuple["Spectrum", str, str]:
 
 
 def choose_limits(spectrum: "Spectrum", x_label: str, y_label: str) -> tuple[float, float]:
+	""" prompt the user to click on a plot to choose lower and upper limits """
 	fig = plt.figure("selection", figsize=FIGURE_SIZE)
 	plot_bars(spectrum, x_label, y_label)
 	plt.title("click to select the lower and upper bounds of the peak, then close this plot")
@@ -163,6 +165,7 @@ def choose_limits(spectrum: "Spectrum", x_label: str, y_label: str) -> tuple[flo
 
 
 def fit_gaussian(spectrum: "Spectrum", left: float, right: float) -> "Gaussian":
+	""" fit a gaussian to a given spectrum within some energy bounds """
 	energy_bin_centers = (spectrum.energy_bin_edges[0:-1] + spectrum.energy_bin_edges[1:])/2
 	in_limits = (energy_bin_centers >= left) & (energy_bin_centers <= right)
 	raw_total = np.sum(spectrum.values*spectrum.energy_bin_widths, where=in_limits)
@@ -179,6 +182,7 @@ def fit_gaussian(spectrum: "Spectrum", left: float, right: float) -> "Gaussian":
 
 def gaussian_function(x: NDArray[float],
                       *args: Union["Gaussian", float]) -> NDArray[float]:
+	""" return the value of a gaussian curve at the given x, specifying the gaussian’s parameters """
 	if len(args) == 1:
 		N, μ, σ = args[0].total.value, args[0].mean.value, args[0].sigma.value
 	elif len(args) == 3:
@@ -190,6 +194,7 @@ def gaussian_function(x: NDArray[float],
 
 def plot_bars(spectrum: "Spectrum", x_label: str, y_label: str,
               color: str = "k", label: Optional[str] = None) -> None:
+	""" plot and label a spectrum in that blocky style that makes it look like a histogram, with error bars """
 	x = np.repeat(spectrum.energy_bin_edges, 2)[1:-1]
 	y = np.repeat(spectrum.values, 2)
 	plt.plot(x, y, color, linewidth=0.7, zorder=3, label=label)
@@ -203,17 +208,20 @@ def plot_bars(spectrum: "Spectrum", x_label: str, y_label: str,
 
 
 def annotate_plot(text: str) -> None:
+	""" put some text in the upper right-hand corner of the plot """
 	text = plt.text(.99, .98, text, zorder=4,
 	                ha='right', va='top', transform=plt.gca().transAxes)
 	text.set_bbox(dict(facecolor='w', alpha=0.5, edgecolor="none"))
 
 
 class InvalidFileError(Exception):
+	""" an error thrown when the specified file is a valid CSV, but not a valid spectrum """
 	pass
 
 
 class Spectrum:
 	def __init__(self, energy_bin_edges: NDArray[float], values: NDArray[float], errors: NDArray[float]):
+		""" an object encapsulating the energy bins, counts, and error bars of a spectrum """
 		assert energy_bin_edges.ndim == 1 and values.ndim == 1 and errors.ndim == 1
 		assert energy_bin_edges.size - 1 == values.size and values.size == errors.size
 		self.energy_bin_edges = energy_bin_edges
@@ -224,6 +232,7 @@ class Spectrum:
 
 class Quantity:
 	def __init__(self, value: float, error: float):
+		""" an inferred number and its error bar """
 		self.value = value
 		self.error = error
 
@@ -245,6 +254,7 @@ class Quantity:
 
 class Gaussian:
 	def __init__(self, total: Quantity, mean: Quantity, sigma: Quantity):
+		""" the three values that define a gaussian curve """
 		self.total = total
 		self.mean = mean
 		self.sigma = sigma

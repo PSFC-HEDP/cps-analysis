@@ -94,6 +94,7 @@ def main(cps1_finger: str, cps2_finger: str, particle: str, directory: str) -> N
 
 
 def load_calibration(filename: str, cps1_finger: str, cps2_finger: str, particle_mass: float) -> "CPS":
+	""" pull up the CPS calibration information for a given pair of fingers, scaled to a certain particle """
 	if "cps1" in filename.lower():
 		cps = 1
 	elif "cps2" in filename.lower():
@@ -143,6 +144,7 @@ def load_calibration(filename: str, cps1_finger: str, cps2_finger: str, particle
 
 
 def load_tracks(filepath: str) -> DataFrame:
+	""" load a .cpsa scan file as a DataFrame """
 	file = cr39.CR39(filepath)
 	file.add_cut(cr39.Cut(cmin=MAX_CONTRAST))
 	file.add_cut(cr39.Cut(emin=MAX_ECCENTRICITY))
@@ -156,6 +158,7 @@ def load_tracks(filepath: str) -> DataFrame:
 
 
 def parse_particle(code: str) -> tuple[str, float]:
+	""" read a string that’s supposed to represent a particle and figure out its full name and A/Z^2 """
 	if code.lower().startswith("p"):
 		mass = 1
 	elif code.lower().startswith("d"):
@@ -184,6 +187,7 @@ def parse_particle(code: str) -> tuple[str, float]:
 
 
 def calculate_background(data: DataFrame, left: float, right: float, bottom: float, top: float) -> DataArray:
+	""" histogram the CR-39 tracks in the background region and normalize the result to be per-area """
 	data = data[in_rectangle(data, left, right, bottom, top)]
 	d_bin_edges = get_bin_edges(D, data[D])
 	c_bin_edges = get_bin_edges(C, data[C])
@@ -195,12 +199,14 @@ def calculate_background(data: DataFrame, left: float, right: float, bottom: flo
 
 def in_rectangle(data: DataFrame,
                  left: float, right: float, bottom: float, top: float) -> NDArray[bool]:
+	""" create a boolean array specifying which of the given tracks are inside the specified rectangle """
 	return (data[X] >= left) & (data[X] <= right) & \
 	       (data[Y] >= bottom) & (data[Y] <= top)
 
 
 def choose_background_region(tracks: DataFrame, data_left: float, data_right: float,
                              data_bottom: float, data_top: float) -> tuple[float, float, float, float]:
+	""" prompt the user to click on a plot to define a rectangle in N(x,y) space """
 	fig = plt.figure("selection", figsize=FIGURE_SIZE)
 	plot_2d_histogram(tracks, X, Y, "click to set the corners of the background region, then close this plot")
 	plot_rectangle(data_left, data_right, data_bottom, data_top, label="Data region")
@@ -246,6 +252,7 @@ def choose_background_region(tracks: DataFrame, data_left: float, data_right: fl
 
 def choose_diameter_cuts(tracks: DataFrame, background: DataArray,
                          ) -> tuple[list["Point"], list["Point"]]:
+	""" prompt the user to click on a plot to highlight a region in N(x,d) space """
 	left, right = tracks[X].min(), tracks[X].max()
 
 	fig = plt.figure("selection", figsize=FIGURE_SIZE)
@@ -313,6 +320,7 @@ def choose_diameter_cuts(tracks: DataFrame, background: DataArray,
 
 def apply_diagonal_cuts(data: DataFrame, minimum_diameter: list["Point"],
                         maximum_diameter: list["Point"]) -> NDArray[bool]:
+	""" apply x-dependent diameter cuts to the data, isolating tracks of a particular particle species """
 	minimum_diameter_at = interpolate.interp1d([p.x for p in minimum_diameter],
 	                                           [p.y for p in minimum_diameter], bounds_error=False)
 	maximum_diameter_at = interpolate.interp1d([p.x for p in maximum_diameter],
@@ -321,6 +329,7 @@ def apply_diagonal_cuts(data: DataFrame, minimum_diameter: list["Point"],
 
 
 def get_bin_edges(label: str, values: NDArray[float]) -> DataArray:
+	""" come up with some appropriate bins for histogramming the specified quantity """
 	minimum, maximum = np.min(values), np.max(values)
 	if "(%)" in label:
 		bin_width, num_bins, quantized = 1, None, True
@@ -341,6 +350,7 @@ def get_bin_edges(label: str, values: NDArray[float]) -> DataArray:
 def infer_spectrum(data: DataFrame, calibration: "CPS", background: DataArray,
                    min_diameter_cut: list["Point"], max_diameter_cut: list["Point"],
                    ) -> "Spectrum":
+	""" take a CR-39 scan and some other information and spit out a spectrum """
 	# calculate the scalar prefactor
 	slit_height = DATA_REGION[1] - DATA_REGION[0]
 	efficiency = slit_height*calibration.slit_width/(4*pi*calibration.slit_distance**2)
@@ -388,6 +398,7 @@ def infer_spectrum(data: DataFrame, calibration: "CPS", background: DataArray,
 
 
 def downsample(spectrum: "Spectrum") -> "Spectrum":
+	""" increase the bin size of a 1D spectrum by an automaticly chosen factor, preserving its zeroth moment """
 	typical_value = np.quantile(spectrum.values, .90)
 	typical_error = np.quantile(spectrum.errors, .90)
 	factor = max(1, round(sqrt(typical_error/typical_value/.05)))
@@ -399,6 +410,7 @@ def downsample(spectrum: "Spectrum") -> "Spectrum":
 
 def plot_rectangle(left: float, right: float, bottom: float, top: float, *,
                    label: Optional[str] = None) -> None:
+	""" outline a rectangle in black on the current Axes and label it """
 	plt.plot([left, right, right, left, left],
 	         [bottom, bottom, top, top, bottom], "k")
 	if label is not None:
@@ -407,6 +419,7 @@ def plot_rectangle(left: float, right: float, bottom: float, top: float, *,
 
 def plot_2d_histogram(data: DataFrame, x_label: str, y_label: str, title: str,
                       background: Optional[DataArray] = None, log_scale=False) -> None:
+	""" plot and label a histogram as a pseudocolor with a good colormap, accounting for background """
 	# set up the binning
 	spacial_image = x_label in SPACIAL_DIMS and y_label in SPACIAL_DIMS
 	x_bin_edges = get_bin_edges(x_label, data[x_label])
@@ -459,6 +472,7 @@ def plot_2d_histogram(data: DataFrame, x_label: str, y_label: str, title: str,
 
 def save_spectrum(spectrum: "Spectrum",
                   particle: str, directory, filename: str) -> None:
+	""" save the given spectrum as a CSV file """
 	energies = (spectrum.energy_bin_edges[0:-1] + spectrum.energy_bin_edges[1:])/2
 	dataframe = DataFrame({f"{particle} energy (MeV)": energies,
 	                       "Spectrum (MeV^-1)": spectrum.values,
@@ -467,9 +481,10 @@ def save_spectrum(spectrum: "Spectrum",
 
 
 class Point:
-	def __init__(self, x: float, d: float):
+	def __init__(self, x: float, y: float):
+		""" a pair of coordinates in x,y space or x,d space (or any 2D space, really) """
 		self.x = x
-		self.y = d
+		self.y = y
 
 	def __str__(self) -> str:
 		return f"Point({self.x}, {self.y})"
@@ -479,6 +494,7 @@ class CPS:
 	def __init__(self, cps: int, finger: str, slit_distance: float, slit_width: float,
 	             x: NDArray[float], minimum_energy: NDArray[float],
 	             nominal_energy: NDArray[float], maximum_energy: NDArray[float]):
+		""" an object containing the finger and slit info for a particular CPS as well as its calibration data """
 		self.cps = cps
 		self.finger = finger
 		self.slit_distance = slit_distance

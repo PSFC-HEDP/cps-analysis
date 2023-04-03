@@ -21,7 +21,7 @@
  Random troubleshooting note just in case it’s relevant: if pip complains about fcntl,
  that’s because you foolishly installed py2app.
  Only Macs are allowed to install py2app. 
- Get it off of your computer you disgusting heathen
+ Get it off of your computer you disgusting whelp
  because it’s basically a virus if you install it on Windows I guess?
 
 ## How to use
@@ -61,25 +61,25 @@
 
  To extract yields, mean energies, and plots from the analyzed spectra, call
  ~~~bash
- python analyze_spectra.py {path/to/files}
+ python analyze_spectra.py {path/to/files/}
  ~~~
  where `{path/to/files/}` stands for the directory, absolute or relative, that contains the `.cpsa` files.
- If the directory is ommitted, it will reuse the same directory you specified for the previous step.
+ If the directory is omitted, it will reuse the same directory you specified for the previous step.
 
  You will be prompted to click on the plot to select the upper and lower limits for the peak fit.
  As before, you can right-click at any time to undo an action.
  Close the plot when the peak limits are satisfactory.
  
  It will repeat this for every spectrum file in the given directory,
- outputing a plot of each spectrum as a PNG,
+ outputting a plot of each spectrum as a PNG,
  with the yield, mean energy, and width written on the side.
  Lmk if you want the output as EPS or something for whatever reason;
  it's not that difficult a thing to add.
 
- This program isn’t as powerful as Fredrick’s AnalyzeCR39,
- so if you have a use case that doesn’t seem to be covered by the choices you’re given,
- you may need to go use that.
- But I hope that this will cover most use cases in a more convenient format.
+ This program isn’t as powerful as Fredrick’s AnalyzeCR39.
+ If you have a use case that doesn’t seem to be covered by the choices you’re given,
+ I encourage you to code it up here, but acknowledge that it’s probably easiest to use AnalyzeCR39 instead.
+ Nevertheless, I hope that this already covers most use cases in a more convenient format.
 
 ## Limitations
 
