@@ -108,4 +108,3 @@
  using the fit mean energy and particle species.
  But I haven't done that yet.
  
- It should also show the fit bounds in the final plot, since that has a major impact on the "raw" yield and mean.
