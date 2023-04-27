@@ -1,7 +1,7 @@
 import os
 import re
 import sys
-from math import sqrt, floor, pi, log, log10
+from math import sqrt, floor, pi, log, log10, nan
 from typing import Union, Optional
 
 import numpy as np
@@ -50,21 +50,24 @@ def main(directory: str) -> None:
 			left, right = choose_limits(spectrum, energy_label, spectrum_label)
 
 			# get the important numbers
-			total_yield = Quantity(np.sum(spectrum.values*spectrum.energy_bin_widths),
-			                       sqrt(np.sum(spectrum.errors**2*spectrum.energy_bin_widths)))
+			raw = count_raw_statistics(spectrum, left, right)
 			gaussian = fit_gaussian(spectrum, left, right)
 
 			# plot the results
 			plt.figure(figsize=FIGURE_SIZE)
+			plt.locator_params(steps=[1, 2, 4, 5, 10])
+			plt.axvline(left, color="black", linewidth=1, linestyle="dashed")
+			plt.axvline(right, color="black", linewidth=1, linestyle="dashed")
 			plot_bars(spectrum, energy_label, spectrum_label)
 			plt.plot(spectrum.energy_bin_edges,
 			         gaussian_function(spectrum.energy_bin_edges, gaussian),
 			         HIGHLIGHT_COLOR, zorder=2)
 			plt.title(filename)
-			annotate_plot(f"Total yield = {total_yield:.2e}\n"
-			              f"Peak yield = {gaussian.total:.2e}\n"
-			              f"Peak energy = {gaussian.mean:.2f} MeV\n"
-			              f"Peak width = {gaussian.sigma*2*sqrt(2*log(2)):.2f} MeV")
+			annotate_plot(f"Raw yield = {raw.total:.2e}\n"
+			              f"Raw mean = {raw.mean:.2f} MeV\n"
+			              f"Fit yield = {gaussian.total:.2e}\n"
+			              f"Fit mean = {gaussian.mean:.2f} MeV\n"
+			              f"Fit width = {gaussian.sigma*2*sqrt(2*log(2)):.2f} MeV")
 			plt.tight_layout()
 
 			# save and display the figure
@@ -75,6 +78,7 @@ def main(directory: str) -> None:
 		# add in an overlaid plot if there are a few of these
 		if len(spectra[shot]) > 1:
 			plt.figure(figsize=FIGURE_SIZE)
+			plt.locator_params(steps=[1, 2, 4, 5, 10])
 			energy_minima, energy_maxima = [], []
 			for cps, (spectrum, energy_label, spectrum_label, _) in spectra[shot].items():
 				plot_bars(spectrum, energy_label, spectrum_label,
@@ -118,6 +122,7 @@ def load_spectrum(filepath: str) -> tuple["Spectrum", str, str]:
 def choose_limits(spectrum: "Spectrum", x_label: str, y_label: str) -> tuple[float, float]:
 	""" prompt the user to click on a plot to choose lower and upper limits """
 	fig = plt.figure("selection", figsize=FIGURE_SIZE)
+	plt.locator_params(steps=[1, 2, 4, 5, 10])
 	plot_bars(spectrum, x_label, y_label)
 	plt.title("click to select the lower and upper bounds of the peak, then close this plot")
 	plt.tight_layout()
@@ -164,24 +169,49 @@ def choose_limits(spectrum: "Spectrum", x_label: str, y_label: str) -> tuple[flo
 	return min(limits), max(limits)
 
 
-def fit_gaussian(spectrum: "Spectrum", left: float, right: float) -> "Gaussian":
+def count_raw_statistics(spectrum: "Spectrum", left: float, right: float) -> "Distribution":
+	# first convert this to a series of bin centers and bin counts
+	energies = (spectrum.energy_bin_edges[0:-1] + spectrum.energy_bin_edges[1:])/2
+	counts = np.where((energies >= left) & (energies <= right),
+	                  spectrum.values*spectrum.energy_bin_widths,
+	                  0)
+	errors = spectrum.errors*spectrum.energy_bin_widths
+	# then do the math
+	total = Quantity(
+		np.sum(counts),  # type: ignore
+		sqrt(np.sum(errors**2)))
+	mean = Quantity(
+		np.sum(energies*counts)/total.value,
+		sqrt(np.sum((errors*(energies/total.value - np.sum(energies*counts)/total.value**2))**2)))
+	sigma = Quantity(
+		sqrt(np.sum((energies - mean.value)**2)),
+		nan)  # eh, no one’s going to look at the sigma error
+	# tie it up in an object and return
+	return Distribution(total, mean, sigma)
+
+
+def fit_gaussian(spectrum: "Spectrum", left: float, right: float) -> "Distribution":
 	""" fit a gaussian to a given spectrum within some energy bounds """
 	energy_bin_centers = (spectrum.energy_bin_edges[0:-1] + spectrum.energy_bin_edges[1:])/2
 	in_limits = (energy_bin_centers >= left) & (energy_bin_centers <= right)
 	raw_total = np.sum(spectrum.values*spectrum.energy_bin_widths, where=in_limits)
-	popt, pcov = optimize.curve_fit(f=gaussian_function,
-	                                xdata=energy_bin_centers[in_limits],
-	                                ydata=spectrum.values[in_limits],
-	                                sigma=spectrum.errors[in_limits],
-	                                p0=[raw_total, (left + right)/2, (right - left)/2])
+	try:
+		popt, pcov = optimize.curve_fit(f=gaussian_function,
+		                                xdata=energy_bin_centers[in_limits],
+		                                ydata=spectrum.values[in_limits],
+		                                sigma=spectrum.errors[in_limits],
+		                                p0=[raw_total, (left + right)/2, (right - left)/2])
+	except RuntimeError:
+		print("Could not find optimal Gaussian parameters!")
+		popt, pcov = np.full(3, nan), np.full((3, 3), nan)
 	values = []
 	for i in range(len(popt)):
 		values.append(Quantity(popt[i], sqrt(pcov[i, i])))
-	return Gaussian(values[0], values[1], values[2])
+	return Distribution(values[0], values[1], values[2])
 
 
 def gaussian_function(x: NDArray[float],
-                      *args: Union["Gaussian", float]) -> NDArray[float]:
+                      *args: Union["Distribution", float]) -> NDArray[float]:
 	""" return the value of a gaussian curve at the given x, specifying the gaussian’s parameters """
 	if len(args) == 1:
 		N, μ, σ = args[0].total.value, args[0].mean.value, args[0].sigma.value
@@ -252,7 +282,7 @@ class Quantity:
 			       f"{format(self.error, format_spec)}"
 
 
-class Gaussian:
+class Distribution:
 	def __init__(self, total: Quantity, mean: Quantity, sigma: Quantity):
 		""" the three values that define a gaussian curve """
 		self.total = total
