@@ -55,7 +55,7 @@ def main(directory: str) -> None:
 
 			# plot the results
 			plt.figure(figsize=FIGURE_SIZE)
-			plt.locator_params(steps=[1, 2, 4, 5, 10])
+			plt.locator_params(steps=[1, 2, 5, 10])
 			plt.axvline(left, color="black", linewidth=1, linestyle="dashed")
 			plt.axvline(right, color="black", linewidth=1, linestyle="dashed")
 			plot_bars(spectrum, energy_label, spectrum_label)
@@ -78,7 +78,7 @@ def main(directory: str) -> None:
 		# add in an overlaid plot if there are a few of these
 		if len(spectra[shot]) > 1:
 			plt.figure(figsize=FIGURE_SIZE)
-			plt.locator_params(steps=[1, 2, 4, 5, 10])
+			plt.locator_params(steps=[1, 2, 5, 10])
 			energy_minima, energy_maxima = [], []
 			for cps, (spectrum, energy_label, spectrum_label, _) in spectra[shot].items():
 				plot_bars(spectrum, energy_label, spectrum_label,
@@ -122,7 +122,7 @@ def load_spectrum(filepath: str) -> tuple["Spectrum", str, str]:
 def choose_limits(spectrum: "Spectrum", x_label: str, y_label: str) -> tuple[float, float]:
 	""" prompt the user to click on a plot to choose lower and upper limits """
 	fig = plt.figure("selection", figsize=FIGURE_SIZE)
-	plt.locator_params(steps=[1, 2, 4, 5, 10])
+	plt.locator_params(steps=[1, 2, 5, 10])
 	plot_bars(spectrum, x_label, y_label)
 	plt.title("click to select the lower and upper bounds of the peak, then close this plot")
 	plt.tight_layout()

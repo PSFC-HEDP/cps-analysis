@@ -9,13 +9,15 @@ from typing import Optional
 import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
-from cr39py import cr39
+from cr39py.scan import Scan
+from cr39py.cut import Cut
 from matplotlib import colors
 from matplotlib.backend_bases import MouseEvent, MouseButton
 from numpy.typing import NDArray
 from pandas import DataFrame
 from scipy import interpolate
 from xarray import DataArray
+from xarray.core.coordinates import DataArrayCoordinates
 
 from analyze_spectra import plot_bars, Spectrum, FIGURE_SIZE
 from cmap import CMAP
@@ -41,7 +43,7 @@ SPACIAL_DIMS = {X, Y}
 
 def main(cps1_finger: str, cps2_finger: str, particle: str, directory: str) -> None:
 	for filename in os.listdir(directory):
-		if filename.endswith(".cpsa"):
+		if filename.endswith(".cpsa") and "_alphas" not in filename:
 			# parse the particle type
 			particle_name, particle_mass = parse_particle(particle)
 
@@ -547,17 +549,17 @@ if __name__ == "__main__":
 							                 f"key: {key}")
 		except IOError:
 			raise ValueError("You must run this script with four command line arguments: "
-			                 "`python analyze_cps.py cps1-finger cps2-finger directory`; "
+			                 "`python analyze_cps.py cps1-finger cps2-finger particle directory`; "
 			                 "or specify the arguments by creating a file called `arguments.txt` "
 			                 "formatted like\n"
 			                 "  “cps1-finger=a1\n   cps2-finger=b2w\n"
 			                 "   particle=d\n   directory=example/path/”")
 		if cps1_finger is None or cps2_finger is None or particle is None or directory is None:
 			raise ValueError("The `arguments.txt` file was missing some of the four required "
-			                 "arguments: cps1, cps2, key, and directory.")
+			                 "arguments: cps1, cps2, particle, and directory.")
 	else:
 		raise ValueError("You must run this script with exactly four command line arguments: "
-		                 "`python analyze_cps.py cps1-finger cps2-finger directory`, "
+		                 "`python analyze_cps.py cps1-finger cps2-finger particle directory`, "
 		                 "or alternatively specify the arguments by creating a file called "
 		                 "`arguments.txt` formatted like \n"
 		                 "  “cps1-finger=a1\n   cps2-finger=b2w\n"
