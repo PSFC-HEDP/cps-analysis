@@ -145,10 +145,10 @@ def load_calibration(filename: str, cps1_finger: str, cps2_finger: str, particle
 
 def load_tracks(filepath: str) -> DataFrame:
 	""" load a .cpsa scan file as a DataFrame """
-	file = cr39.CR39(filepath)
-	file.add_cut(cr39.Cut(cmin=MAX_CONTRAST))
-	file.add_cut(cr39.Cut(emin=MAX_ECCENTRICITY))
-	file.add_cut(cr39.Cut(dmin=MAX_DIAMETER))
+	file = Scan.from_cpsa(filepath)
+	file.add_cut(Cut(cmin=MAX_CONTRAST))
+	file.add_cut(Cut(emin=MAX_ECCENTRICITY))
+	file.add_cut(Cut(dmin=MAX_DIAMETER))
 	file.apply_cuts()
 	if file.ntracks == 0:
 		raise ValueError("the file is empty")
@@ -328,8 +328,16 @@ def apply_diagonal_cuts(data: DataFrame, minimum_diameter: list["Point"],
 	return (data[D] >= minimum_diameter_at(data[X])) & (data[D] <= maximum_diameter_at(data[X]))
 
 
-def get_bin_edges(label: str, values: NDArray[float]) -> DataArray:
+def get_bin_edges(label: str, values: NDArray[float],
+                  existing_bin_coords: Optional[DataArrayCoordinates] = None) -> DataArray:
 	""" come up with some appropriate bins for histogramming the specified quantity """
+	# first check if the bins are already defined
+	if existing_bin_coords and label in existing_bin_coords:
+		data = existing_bin_coords[label].values  # add the end on, since bin_coords is only the left edges
+		data = np.concatenate([data, [2*data[-1] - data[-2]]])
+		return DataArray(data, dims=(label,), coords={label: data})
+
+	# if not, choose them by some method that depends on the units
 	minimum, maximum = np.min(values), np.max(values)
 	if "(%)" in label:
 		bin_width, num_bins, quantized = 1, None, True
@@ -340,11 +348,12 @@ def get_bin_edges(label: str, values: NDArray[float]) -> DataArray:
 	else:
 		bin_width, num_bins, quantized = None, 80, False
 	if quantized:
-		return np.arange(-0.5, maximum/bin_width + 1)*bin_width
+		data = np.arange(-0.5, maximum/bin_width + 1)*bin_width
 	else:
 		if num_bins is None:
 			num_bins = round((maximum - minimum)/bin_width)
-		return DataArray(np.linspace(minimum, maximum, num_bins + 1), dims=(label,))
+		data = np.linspace(minimum, maximum, num_bins + 1)
+	return DataArray(data, dims=(label,))
 
 
 def infer_spectrum(data: DataFrame, calibration: "CPS", background: DataArray,
@@ -422,8 +431,9 @@ def plot_2d_histogram(data: DataFrame, x_label: str, y_label: str, title: str,
 	""" plot and label a histogram as a pseudocolor with a good colormap, accounting for background """
 	# set up the binning
 	spacial_image = x_label in SPACIAL_DIMS and y_label in SPACIAL_DIMS
-	x_bin_edges = get_bin_edges(x_label, data[x_label])
-	y_bin_edges = get_bin_edges(y_label, data[y_label])
+	existing_bin_coords = background.coords if background is not None else None
+	x_bin_edges = get_bin_edges(x_label, data[x_label], existing_bin_coords=existing_bin_coords)
+	y_bin_edges = get_bin_edges(y_label, data[y_label], existing_bin_coords=existing_bin_coords)
 
 	# compute the histogram
 	counts = DataArray(
