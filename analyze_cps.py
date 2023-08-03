@@ -1,16 +1,15 @@
 # analyze CPS
-
+import argparse
 import os
 import re
-import sys
 from math import log, floor, ceil, pi, sqrt
 from typing import Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
-from cr39py.scan import Scan
 from cr39py.cut import Cut
+from cr39py.scan import Scan
 from matplotlib import colors
 from matplotlib.backend_bases import MouseEvent, MouseButton
 from numpy.typing import NDArray
@@ -26,7 +25,6 @@ SLIT_WIDTH = 2e-1  # (cm)
 
 DATA_REGION = (-1.2, 0.9)  # y_min, y_max (cm)
 
-MAX_CONTRAST = 20  # (%)
 MAX_ECCENTRICITY = 15  # (%)
 MAX_DIAMETER = 25  # (μm)
 BIN_SIZE = .05  # (MeV)
@@ -41,86 +39,107 @@ C = "Track contrast (%)"
 SPACIAL_DIMS = {X, Y}
 
 
-def main(cps1_finger: str, cps2_finger: str, particle: str, directory: str) -> None:
-	for filename in os.listdir(directory):
-		if filename.endswith(".cpsa") and "_alphas" not in filename:
-			# parse the particle type
-			particle_name, particle_mass = parse_particle(particle)
+def main(particle: str, directory: str, user_specified_cps: Optional[int], max_contrast=float) -> None:
+	found_any_files = False
+	for subdirectory, _, filenames in os.walk(directory):
+		for filename in filenames:
+			if filename.endswith(".cpsa") and "_alphas" not in filename:
+				print(f"analyzing `{filename}`...")
+				found_any_files = True
+				# parse the particle type
+				particle_name, particle_mass = parse_particle(particle)
 
-			# load the calibration data from disk
-			calibration = load_calibration(filename, cps1_finger, cps2_finger, particle_mass)
-			left, right = np.min(calibration.x), np.max(calibration.x)
+				# load the calibration data from disk
+				calibration = load_calibration(filename, particle_mass, user_specified_cps)
+				left, right = np.min(calibration.x), np.max(calibration.x)
 
-			# load the tracks from the cpsa file
-			tracks = load_tracks(os.path.join(directory, filename))
-			data = in_rectangle(tracks, left, right, *DATA_REGION)
+				# load the tracks from the cpsa file
+				tracks = load_tracks(os.path.join(subdirectory, filename), max_contrast)
+				data = in_rectangle(tracks, left, right, *DATA_REGION)
 
-			# ask the user about the background region
-			background_region = choose_background_region(tracks, left, right, *DATA_REGION)
-			background = calculate_background(tracks, *background_region)
+				# ask the user about the background region
+				background_region = choose_background_region(tracks, left, right, *DATA_REGION)
+				background = calculate_background(tracks, *background_region)
 
-			# ask the user about the diameter cuts
-			min_diameter_cut, max_diameter_cut = choose_diameter_cuts(tracks[data], background)
-			signal = data & apply_diagonal_cuts(tracks, min_diameter_cut, max_diameter_cut)
+				# ask the user about the diameter cuts
+				min_diameter_cut, max_diameter_cut = choose_diameter_cuts(tracks[data], background)
+				signal = data & apply_diagonal_cuts(tracks, min_diameter_cut, max_diameter_cut)
 
-			# plot the cleaned-up data
-			plt.figure(figsize=FIGURE_SIZE)
-			plot_2d_histogram(tracks, X, Y, filename[:-5])
-			plot_rectangle(*background_region, label="Background")
-			plot_rectangle(left, right, *DATA_REGION, label="Data")
-			plt.tight_layout()
-			plt.figure(figsize=FIGURE_SIZE)
-			plot_2d_histogram(tracks[signal], D, C, filename[:-5], background, log_scale=True)
-			plt.tight_layout()
-			plt.figure(figsize=FIGURE_SIZE)
-			plt.fill_between(calibration.x,
-			                 calibration.minimum_energy,
-			                 calibration.maximum_energy, alpha=.5)
-			plt.plot(calibration.x, calibration.nominal_energy)
-			plt.xlabel(X)
-			plt.ylabel(f"{particle_name} energy (MeV)")
-			plt.tight_layout()
+				# plot the cleaned-up data
+				plt.figure(figsize=FIGURE_SIZE)
+				plot_2d_histogram(tracks, X, Y, filename[:-5])
+				plot_rectangle(*background_region, label="Background")
+				plot_rectangle(left, right, *DATA_REGION, label="Data")
+				plt.tight_layout()
+				plt.figure(figsize=FIGURE_SIZE)
+				plot_2d_histogram(tracks[signal], D, C, filename[:-5], background, log_scale=True)
+				plt.tight_layout()
+				plt.figure(figsize=FIGURE_SIZE)
+				plt.fill_between(calibration.x,
+				                 calibration.minimum_energy,
+				                 calibration.maximum_energy, alpha=.5)
+				plt.plot(calibration.x, calibration.nominal_energy)
+				plt.xlabel(X)
+				plt.ylabel(f"{particle_name} energy (MeV)")
+				plt.tight_layout()
 
-			# analyze and save the data
-			spectrum = infer_spectrum(
-				tracks[signal], calibration, background, min_diameter_cut, max_diameter_cut)
-			spectrum = downsample(spectrum)
-			save_spectrum(spectrum, particle_name, directory, filename[:-5])
+				# analyze and save the data
+				spectrum = infer_spectrum(
+					tracks[signal], calibration, background, min_diameter_cut, max_diameter_cut)
+				spectrum = downsample(spectrum)
+				save_spectrum(spectrum, particle_name, subdirectory, filename[:-5])
 
-			# plot the results
-			plt.figure(figsize=FIGURE_SIZE)
-			plot_bars(spectrum, f"{particle_name} energy (MeV)", "Spectrum (MeV^-1)")
-			plt.tight_layout()
+				# plot the results
+				plt.figure(figsize=FIGURE_SIZE)
+				plot_bars(spectrum, f"{particle_name} energy (MeV)", "Spectrum (MeV^-1)")
+				plt.tight_layout()
 
-			plt.show()
+				plt.show()
+
+	if found_any_files:
+		print("done!")
+	else:
+		print(f"No CPS scan files were found in `{directory}`.")
 
 
-def load_calibration(filename: str, cps1_finger: str, cps2_finger: str, particle_mass: float) -> "CPS":
+def load_calibration(filename: str, particle_mass: float, user_specified_cps: Optional[int]) -> "CPS":
 	""" pull up the CPS calibration information for a given pair of fingers, scaled to a certain particle """
+	# infer which CPS this is
 	if "cps1" in filename.lower():
 		cps = 1
 	elif "cps2" in filename.lower():
 		cps = 2
-	elif cps2_finger.lower().startswith("n"):
-		cps = 1
-	elif cps1_finger.lower().startswith("n"):
-		cps = 2
 	else:
-		raise ValueError(f"the filename doesn't make it clear whether CPS1 or CPS2 was used: "
-		                 f"`{filename}`")
-
+		cps = None
+	if user_specified_cps is not None:
+		if cps is not None and cps != user_specified_cps:
+			raise ValueError(f"You specified that this was CPS{user_specified_cps}, "
+			                 f"but the filename clearly says CPS{cps}. I'm confused.")
+		else:
+			cps = user_specified_cps
+	elif cps is None:
+		raise ValueError(f"the filename `{filename}` doesn't make it clear whether CPS1 or CPS2 was used. "
+		                 f"please use the flag --cps=1 or --cps=2.")
 	if cps == 1:
-		finger = cps1_finger
 		slit_distance = CPS1_DISTANCE
 	elif cps == 2:
-		finger = cps2_finger
 		slit_distance = CPS2_DISTANCE
 	else:
 		raise ValueError()
+
+	# infer which finger was used
+	finger_search = re.search(r"[a-dA-D][0-9]{1,2}w?", filename)
+	if finger_search is not None:
+		finger = finger_search.group()
+	else:
+		raise ValueError(f"the filename doesn't make it clear which finger was used: "
+		                 f"`{filename}`")
+
+	# load the calibration file
 	x, energy = None, None
 	i, j = 0, 0
 	try:
-		with open(os.path.join("calibrations", f"cps{cps}-{finger}.csv"), "r") as file:
+		with open(os.path.join("calibrations", f"cps{cps}-{finger.lower()}.csv"), "r") as file:
 			for line in file:
 				if re.fullmatch(r"\d+\s*", line) and x is None:
 					resolution = (int(line) - 2)//3
@@ -145,10 +164,10 @@ def load_calibration(filename: str, cps1_finger: str, cps2_finger: str, particle
 	return CPS(cps, finger, slit_distance, SLIT_WIDTH, x, energy[0, :], energy[1, :], energy[2, :])
 
 
-def load_tracks(filepath: str) -> DataFrame:
+def load_tracks(filepath: str, max_contrast: float) -> DataFrame:
 	""" load a .cpsa scan file as a DataFrame """
 	file = Scan.from_cpsa(filepath)
-	file.add_cut(Cut(cmin=MAX_CONTRAST))
+	file.add_cut(Cut(cmin=max_contrast))
 	file.add_cut(Cut(emin=MAX_ECCENTRICITY))
 	file.add_cut(Cut(dmin=MAX_DIAMETER))
 	file.apply_cuts()
@@ -243,7 +262,8 @@ def choose_background_region(tracks: DataFrame, data_left: float, data_right: fl
 	while plt.fignum_exists("selection"):
 		plt.pause(.1)
 	if len(vertices) != 2:
-		raise ValueError("you didn't specify both corners of the rectangle.")
+		print("you didn't specify both corners of the rectangle.  do it again.")
+		return choose_background_region(tracks, data_left, data_right, data_bottom, data_top)
 
 	# once the user is done, arrange the results
 	a, b = vertices
@@ -457,7 +477,7 @@ def plot_2d_histogram(data: DataFrame, x_label: str, y_label: str, title: str,
 		counts -= background
 
 	# set up the limits
-	vmax = np.quantile(counts, .999)
+	vmax = np.quantile(counts, .99)
 	if log_scale and vmax > 1e3:
 		norm = colors.SymLogNorm(
 			vmin=0, linthresh=max(30, vmax/1e3), vmax=vmax,
@@ -521,48 +541,17 @@ class CPS:
 
 
 if __name__ == "__main__":
-	if len(sys.argv) == 5:
-		cps1_finger, cps2_finger, particle, directory = sys.argv[1:]
-		with open("arguments.txt", "w") as file:
-			file.write(f"cps1-finger={cps1_finger}\n"
-			           f"cps2-finger={cps2_finger}\n"
-			           f"particle={particle}\n"
-			           f"directory={directory}\n")
-	elif len(sys.argv) == 1:
-		cps1_finger, cps2_finger, particle, directory = None, None, None, None
-		try:
-			with open("arguments.txt", "r") as file:
-				for line in file:
-					if "=" in line:
-						key = line[:line.index("=")].lower()
-						value = line[line.index("=") + 1:].lower().strip()
-						if "cps1" in key:
-							cps1_finger = value
-						elif "cps2" in key:
-							cps2_finger = value
-						elif "particle" in key or "ion" in key or "a/z^2" in key:
-							particle = value
-						elif "directory" in key or "path" in key:
-							directory = value
-						else:
-							raise ValueError(f"The `arguments.txt` file contains an unrecognized "
-							                 f"key: {key}")
-		except IOError:
-			raise ValueError("You must run this script with four command line arguments: "
-			                 "`python analyze_cps.py cps1-finger cps2-finger particle directory`; "
-			                 "or specify the arguments by creating a file called `arguments.txt` "
-			                 "formatted like\n"
-			                 "  “cps1-finger=a1\n   cps2-finger=b2w\n"
-			                 "   particle=d\n   directory=example/path/”")
-		if cps1_finger is None or cps2_finger is None or particle is None or directory is None:
-			raise ValueError("The `arguments.txt` file was missing some of the four required "
-			                 "arguments: cps1, cps2, particle, and directory.")
-	else:
-		raise ValueError("You must run this script with exactly four command line arguments: "
-		                 "`python analyze_cps.py cps1-finger cps2-finger particle directory`, "
-		                 "or alternatively specify the arguments by creating a file called "
-		                 "`arguments.txt` formatted like \n"
-		                 "  “cps1-finger=a1\n   cps2-finger=b2w\n"
-		                 "   particle=d\n   directory=example/path/”")
+	parser = argparse.ArgumentParser(
+		prog="python analyze_cps.py",
+		description="Convert CPSA scan files to spectra and save them as CSV files.")
+	parser.add_argument("particle", type=str,
+	                    help="The name or A/Z^2 of the particle being measured.")
+	parser.add_argument("--directory", type=str, default="./",
+	                    help="Absolute or relative path to the folder containing the scan file(s) (not necessary if the scan files are located somewhere in the current working directory)")
+	parser.add_argument("--cps", type=str, default=None,
+	                    help="The number of the CPS we're analyzing (not necessary if the filename specifies)")
+	parser.add_argument("--max_contrast", type=float, default=35,
+	                    help="The contrast level above which tracks are ignored (default: 35)")
+	args = parser.parse_args()
 
-	main(cps1_finger, cps2_finger, particle, directory)
+	main(args.particle, args.directory, int(args.cps[-1]) if args.cps is not None else None, args.max_contrast)

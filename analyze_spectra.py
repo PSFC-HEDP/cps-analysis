@@ -1,6 +1,6 @@
+import argparse
 import os
 import re
-import sys
 from math import sqrt, floor, pi, log, log10, nan
 from typing import Union, Optional
 
@@ -12,7 +12,6 @@ from numpy.typing import NDArray
 from pandas.errors import ParserError
 from scipy import optimize
 
-
 FIGURE_SIZE = (7.5, 4)
 HIGHLIGHT_COLOR = "#C00000"
 CATEGORICAL_COLORS = ["#406836", "#BA5662", "#1D4881"]
@@ -21,27 +20,30 @@ CATEGORICAL_COLORS = ["#406836", "#BA5662", "#1D4881"]
 def main(directory: str) -> None:
 	# load all the spectra and organize them
 	spectra: dict[str, dict[int, tuple[Spectrum, str, str, str]]] = {}
-	for filename in os.listdir(directory):
-		if filename.endswith(".csv"):
-			cps_descriptor = re.search(r"cps(\d+)_?", filename, re.IGNORECASE)
-			if cps_descriptor is not None:
-				cps = int(cps_descriptor.group(1))
-			else:
-				cps = 0
-			shot_descriptor = re.search(r"O?\d{5,6}", filename, re.IGNORECASE)
-			if shot_descriptor is not None:
-				shot = shot_descriptor.group(0)
-			else:
-				shot = filename[:-4]
-			if shot not in spectra:
-				spectra[shot] = {}
-			try:
-				spectrum, energy_label, spectrum_label = load_spectrum(
-					os.path.join(directory, filename))
-			except (ParserError, InvalidFileError):
-				print(f"I'm skipping {filename} because I can't read it.")
-				continue
-			spectra[shot][cps] = spectrum, energy_label, spectrum_label, filename[:-4]
+	for subdirectory, _, filenames in os.walk(directory):
+		for filename in filenames:
+			if filename.endswith(".csv"):
+				cps_descriptor = re.search(r"cps(\d+)_?", filename, re.IGNORECASE)
+				if cps_descriptor is not None:
+					cps = int(cps_descriptor.group(1))
+				else:
+					cps = 0
+				shot_descriptor = re.search(r"O?\d{5,6}", filename, re.IGNORECASE)
+				if shot_descriptor is not None:
+					shot = shot_descriptor.group(0)
+				else:
+					shot = filename[:-4]
+				if shot not in spectra:
+					spectra[shot] = {}
+				try:
+					spectrum, energy_label, spectrum_label = load_spectrum(
+						os.path.join(subdirectory, filename))
+				except (ParserError, InvalidFileError):
+					print(f"I'm skipping {filename} because I can't read it.")
+					continue
+				spectra[shot][cps] = spectrum, energy_label, spectrum_label, filename[:-4]
+	if len(spectra) == 0:
+		print(f"No CPS spectra were found in `{directory}`.")
 
 	# then go thru them by shot
 	for shot in sorted(spectra.keys()):
@@ -171,7 +173,8 @@ def choose_limits(spectrum: "Spectrum", x_label: str, y_label: str) -> tuple[flo
 	while plt.fignum_exists("selection"):
 		plt.pause(.1)
 	if len(limits) != 2:
-		raise ValueError("you didn't specify both limits.")
+		print("you didn't specify both limits. do it again.")
+		return choose_limits(spectrum, x_label, y_label)
 
 	# once the user is done, arrange the results
 	return min(limits), max(limits)
@@ -298,27 +301,11 @@ class Distribution:
 
 
 if __name__ == "__main__":
-	if len(sys.argv) == 2:
-		directory = sys.argv[1:]
-		if not os.path.isfile("arguments.txt"):
-			with open("arguments.txt", "w") as file:
-				file.write(f"directory={directory}\n")
-	elif len(sys.argv) == 1:
-		directory = None
-		try:
-			with open("arguments.txt", "r") as file:
-				for line in file:
-					if "=" in line:
-						key = line[:line.index("=")].lower()
-						value = line[line.index("=") + 1:].lower().strip()
-						if "directory" in key or "path" in key:
-							directory = value
-		except IOError:
-			raise ValueError("You must pass the directory to analyze as an argument.")
-		if directory is None:
-			raise ValueError("The `arguments.txt` file existed but didn't contain a `directory` argument.")
-	else:
-		raise ValueError("You must run this script with exactly one command line arguments – "
-		                 "the directory to analyze")
+	parser = argparse.ArgumentParser(
+		prog="python analyze_spectra.py",
+		description="Convert analyzed spectra to useful plots and numbers.")
+	parser.add_argument("--directory", type=str, default="./",
+	                    help="Absolute or relative path to the folder containing the spectrum CSV files (not necessary if the scan files are located somewhere in the current working directory)")
+	args = parser.parse_args()
 
-	main(directory)
+	main(args.directory)

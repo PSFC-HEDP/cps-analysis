@@ -30,13 +30,12 @@
 
  To run the basic spectrum inference, simply navigate to the root directory in a command line and call
  ~~~bash
- python analyze_cps.py {cps1-finger} {cps2-finger} {particle} {path/to/files/}
+ python analyze_cps.py {particle} --directory={path/to/files/}
  ~~~
- where `{cps1-finger}` stands for the CPS1 configuration (for example “b5”),
- `{cps2-finger}` stands for the CPS2 configuration (for example “d9w”),
- `{particle}` stands for the particle being measured or the A/Z^2 of the particle being measured (for example “d” or “2.0”)
+ where `{particle}` stands for the particle being measured or the A/Z^2 of the particle being measured (for example “d” or “2.0”)
  and `{path/to/files/}` stands for the directory, absolute or relative, that contains the `.cpsa` files.
- If you only have files for one CPS, you may set the finger of the other one to “none”.
+ The directory may be omitted if the files are somewhere in the current working directory.
+ You may also optionally set the max contrast with `--max_contrast=X`.
 
  You will first be prompted to click on the plot to highlight the background region.
  This will generally be somewhere in the empty space above the indicated data region.
@@ -53,6 +52,7 @@
  Pay attention to how the lines appear to make sure it’s understanding you correctly.
  As before, you can right-click at any point to undo an action.
  Close the plot when the diameter cuts are satisfactory.
+ If you only draw one line, it will be taken as the maximum diameter and the minimum diameter will be set to zero.
  
  It will repeat this for every scan file in the given directory,
  outputing a CSV containing the spectrum for each one.
@@ -61,10 +61,10 @@
 
  To extract yields, mean energies, and plots from the analyzed spectra, call
  ~~~bash
- python analyze_spectra.py {path/to/files/}
+ python analyze_spectra.py --directory={path/to/files/}
  ~~~
- where `{path/to/files/}` stands for the directory, absolute or relative, that contains the `.cpsa` files.
- If the directory is omitted, it will reuse the same directory you specified for the previous step.
+ where `{path/to/files/}` stands for the directory, absolute or relative, that contains the `.csv` files.
+ The directory may be omitted if the files are somewhere in the current working directory.
 
  You will be prompted to click on the plot to select the upper and lower limits for the peak fit.
  As before, you can right-click at any time to undo an action.
