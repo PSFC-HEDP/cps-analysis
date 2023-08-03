@@ -51,7 +51,11 @@ def main(directory: str) -> None:
 
 			# get the important numbers
 			raw = count_raw_statistics(spectrum, left, right)
-			gaussian = fit_gaussian(spectrum, left, right)
+			try:
+				gaussian = fit_gaussian(spectrum, left, right)
+			except RuntimeError as e:
+				print(e)
+				continue
 
 			# plot the results
 			plt.figure(figsize=FIGURE_SIZE)
@@ -153,9 +157,13 @@ def choose_limits(spectrum: "Spectrum", x_label: str, y_label: str) -> tuple[flo
 				else:
 					lines[i].set_visible(False)
 			if len(limits) == 2:
-				gaussian = fit_gaussian(spectrum, min(limits), max(limits))
-				curve.set_ydata(gaussian_function(spectrum.energy_bin_edges, gaussian))
-				curve.set_visible(True)
+				try:
+					gaussian = fit_gaussian(spectrum, min(limits), max(limits))
+				except RuntimeError:
+					curve.set_visible(False)
+				else:
+					curve.set_ydata(gaussian_function(spectrum.energy_bin_edges, gaussian))
+					curve.set_visible(True)
 			else:
 				curve.set_visible(False)
 	fig.canvas.mpl_connect('button_press_event', on_click)
@@ -201,9 +209,8 @@ def fit_gaussian(spectrum: "Spectrum", left: float, right: float) -> "Distributi
 		                                ydata=spectrum.values[in_limits],
 		                                sigma=spectrum.errors[in_limits],
 		                                p0=[raw_total, (left + right)/2, (right - left)/2])
-	except RuntimeError:
-		print("Could not find optimal Gaussian parameters!")
-		popt, pcov = np.full(3, nan), np.full((3, 3), nan)
+	except (RuntimeError, ValueError, TypeError):
+		raise RuntimeError("Could not find optimal Gaussian parameters!")
 	values = []
 	for i in range(len(popt)):
 		values.append(Quantity(popt[i], sqrt(pcov[i, i])))
@@ -272,7 +279,7 @@ class Quantity:
 	def __format__(self, format_spec: str) -> str:
 		# for "e", manage the exponent manually to make the value and error match
 		if "e" in format_spec:
-			exponent = floor(log10(self.value))
+			exponent = floor(log10(abs(self.value)))
 			new_format_spec = format_spec.replace("e", "f")
 			return f"{format(self.value/10**exponent, new_format_spec)}e{exponent:+03d} ± " \
 			       f"{format(self.error/10**exponent, new_format_spec)}e{exponent:+03d}"
