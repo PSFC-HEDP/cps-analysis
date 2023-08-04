@@ -39,7 +39,7 @@ C = "Track contrast (%)"
 SPACIAL_DIMS = {X, Y}
 
 
-def main(particle: str, directory: str, user_specified_cps: Optional[int], max_contrast=float) -> None:
+def main(particle: str, directory: str, user_specified_cps: Optional[int], max_contrast: float) -> None:
 	found_any_files = False
 	for subdirectory, _, filenames in os.walk(directory):
 		for filename in filenames:
