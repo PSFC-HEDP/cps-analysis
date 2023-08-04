@@ -19,7 +19,7 @@ CATEGORICAL_COLORS = ["#406836", "#BA5662", "#1D4881"]
 
 def main(directory: str) -> None:
 	# load all the spectra and organize them
-	spectra: dict[str, dict[int, tuple[Spectrum, str, str, str]]] = {}
+	spectra: dict[str, dict[int, list[tuple[Spectrum, str, str, str]]]] = {}
 	for subdirectory, _, filenames in os.walk(directory):
 		for filename in filenames:
 			if filename.endswith(".csv"):
@@ -35,66 +35,72 @@ def main(directory: str) -> None:
 					shot = filename[:-4]
 				if shot not in spectra:
 					spectra[shot] = {}
+				if cps not in spectra[shot]:
+					spectra[shot][cps] = []
 				try:
 					spectrum, energy_label, spectrum_label = load_spectrum(
 						os.path.join(subdirectory, filename))
 				except (ParserError, InvalidFileError):
 					print(f"I'm skipping {filename} because I can't read it.")
 					continue
-				spectra[shot][cps] = spectrum, energy_label, spectrum_label, filename[:-4]
+				spectra[shot][cps].append((spectrum, energy_label, spectrum_label, filename[:-4]))
 	if len(spectra) == 0:
 		print(f"No CPS spectra were found in `{directory}`.")
 
 	# then go thru them by shot
 	for shot in sorted(spectra.keys()):
-		for spectrum, energy_label, spectrum_label, filename in spectra[shot].values():
-			# ask the user for the energy limits
-			left, right = choose_limits(spectrum, energy_label, spectrum_label)
+		for spectra_on_each_cps in spectra[shot].values():
+			for spectrum, energy_label, spectrum_label, filename in spectra_on_each_cps:
+				# ask the user for the energy limits
+				left, right = choose_limits(spectrum, energy_label, spectrum_label)
 
-			# get the important numbers
-			raw = count_raw_statistics(spectrum, left, right)
-			try:
-				gaussian = fit_gaussian(spectrum, left, right)
-			except RuntimeError as e:
-				print(e)
-				continue
+				# get the important numbers
+				raw = count_raw_statistics(spectrum, left, right)
+				try:
+					gaussian = fit_gaussian(spectrum, left, right)
+				except RuntimeError as e:
+					print(e)
+					continue
 
-			# plot the results
-			plt.figure(figsize=FIGURE_SIZE)
-			plt.locator_params(steps=[1, 2, 5, 10])
-			plt.axvline(left, color="black", linewidth=1, linestyle="dashed")
-			plt.axvline(right, color="black", linewidth=1, linestyle="dashed")
-			plot_bars(spectrum, energy_label, spectrum_label)
-			plt.plot(spectrum.energy_bin_edges,
-			         gaussian_function(spectrum.energy_bin_edges, gaussian),
-			         HIGHLIGHT_COLOR, zorder=2)
-			plt.title(filename)
-			annotate_plot(f"Raw yield = {raw.total:.2e}\n"
-			              f"Raw mean = {raw.mean:.2f} MeV\n"
-			              f"Fit yield = {gaussian.total:.2e}\n"
-			              f"Fit mean = {gaussian.mean:.2f} MeV\n"
-			              f"Fit width = {gaussian.sigma*2*sqrt(2*log(2)):.2f} MeV")
-			plt.tight_layout()
+				# plot the results
+				plt.figure(figsize=FIGURE_SIZE)
+				plt.locator_params(steps=[1, 2, 5, 10])
+				plt.axvline(left, color="black", linewidth=1, linestyle="dashed")
+				plt.axvline(right, color="black", linewidth=1, linestyle="dashed")
+				plot_bars(spectrum, energy_label, spectrum_label)
+				plt.plot(spectrum.energy_bin_edges,
+				         gaussian_function(spectrum.energy_bin_edges, gaussian),
+				         HIGHLIGHT_COLOR, zorder=2)
+				plt.title(filename)
+				annotate_plot(f"Raw yield = {raw.total:.2e}\n"
+				              f"Raw mean = {raw.mean:.2f} MeV\n"
+				              f"Fit yield = {gaussian.total:.2e}\n"
+				              f"Fit mean = {gaussian.mean:.2f} MeV\n"
+				              f"Fit width = {gaussian.sigma*2*sqrt(2*log(2)):.2f} MeV")
+				plt.tight_layout()
 
-			# save and display the figure
-			plt.savefig(os.path.join(directory, filename + ".png"),
-			            dpi=300, transparent=True)
-			plt.show()
+				# save and display the figure
+				plt.savefig(os.path.join(directory, filename + ".png"),
+				            dpi=300, transparent=True)
+				plt.show()
 
-		# add in an overlaid plot if there are a few of these
+		# add in an overlaid plot if both CPS were used
 		if len(spectra[shot]) > 1:
-			plt.figure(figsize=FIGURE_SIZE)
-			plt.locator_params(steps=[1, 2, 5, 10])
-			energy_minima, energy_maxima = [], []
-			for cps, (spectrum, energy_label, spectrum_label, _) in spectra[shot].items():
-				plot_bars(spectrum, energy_label, spectrum_label,
-				          color=CATEGORICAL_COLORS[cps], label=f"CPS{cps}")
-				energy_minima.append(spectrum.energy_bin_edges[0])
-				energy_maxima.append(spectrum.energy_bin_edges[-1])
-			plt.legend()
-			plt.xlim(max(energy_minima), min(energy_maxima))
-			plt.tight_layout()
-			plt.savefig(os.path.join(directory, shot + "_spectra.png"), transparent=True)
+			# do one for each set of corresponding fingers
+			for finger_index in range(min(len(spectra[shot][cps]) for cps in spectra[shot])):
+				plt.figure(figsize=FIGURE_SIZE)
+				plt.locator_params(steps=[1, 2, 5, 10])
+				energy_minima, energy_maxima = [], []
+				for cps, spectra_on_this_cps in spectra[shot].items():
+					spectrum, energy_label, spectrum_label, _ = spectra_on_this_cps[finger_index]
+					plot_bars(spectrum, energy_label, spectrum_label,
+					          color=CATEGORICAL_COLORS[cps], label=f"CPS{cps}")
+					energy_minima.append(spectrum.energy_bin_edges[0])
+					energy_maxima.append(spectrum.energy_bin_edges[-1])
+				plt.legend()
+				plt.xlim(max(energy_minima), min(energy_maxima))
+				plt.tight_layout()
+				plt.savefig(os.path.join(directory, shot + "_spectra.png"), transparent=True)
 
 		plt.show()
 
