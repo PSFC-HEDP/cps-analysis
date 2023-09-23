@@ -1,7 +1,7 @@
 import argparse
 import os
 import re
-from math import sqrt, floor, pi, log, log10, nan
+from math import sqrt, floor, pi, log, log10, nan, inf
 from typing import Union, Optional
 
 import numpy as np
@@ -51,6 +51,8 @@ def main(directory: str) -> None:
 	for shot in sorted(spectra.keys()):
 		for spectra_on_each_cps in spectra[shot].values():
 			for spectrum, energy_label, spectrum_label, filename in spectra_on_each_cps:
+				print(filename)
+
 				# ask the user for the energy limits
 				left, right = choose_limits(spectrum, energy_label, spectrum_label)
 
@@ -65,8 +67,6 @@ def main(directory: str) -> None:
 				# plot the results
 				plt.figure(figsize=FIGURE_SIZE)
 				plt.locator_params(steps=[1, 2, 5, 10])
-				plt.axvline(left, color="black", linewidth=1, linestyle="dashed")
-				plt.axvline(right, color="black", linewidth=1, linestyle="dashed")
 				plot_bars(spectrum, energy_label, spectrum_label)
 				plt.plot(spectrum.energy_bin_edges,
 				         gaussian_function(spectrum.energy_bin_edges, gaussian),
@@ -87,7 +87,8 @@ def main(directory: str) -> None:
 		# add in an overlaid plot if both CPS were used
 		if len(spectra[shot]) > 1:
 			# do one for each set of corresponding fingers
-			for finger_index in range(min(len(spectra[shot][cps]) for cps in spectra[shot])):
+			num_finger_pairs = min(len(spectra[shot][cps]) for cps in spectra[shot])
+			for finger_index in range(num_finger_pairs):
 				plt.figure(figsize=FIGURE_SIZE)
 				plt.locator_params(steps=[1, 2, 5, 10])
 				energy_minima, energy_maxima = [], []
@@ -100,7 +101,7 @@ def main(directory: str) -> None:
 				plt.legend()
 				plt.xlim(max(energy_minima), min(energy_maxima))
 				plt.tight_layout()
-				plt.savefig(os.path.join(directory, shot + "_spectra.png"), transparent=True)
+				plt.savefig(os.path.join(directory, f"{shot}_{finger_index}_spectra.png"), transparent=True)
 
 		plt.show()
 
@@ -143,10 +144,27 @@ def choose_limits(spectrum: "Spectrum", x_label: str, y_label: str) -> tuple[flo
 	                  HIGHLIGHT_COLOR, zorder=2)
 	curve.set_visible(False)
 
+	minimum = spectrum.energy_bin_edges[0]
+	maximum = spectrum.energy_bin_edges[-1]
 	limits: list[float] = []
 
+	def update_plot():
+		nonlocal minimum, maximum
+		if len(limits) < 2:
+			minimum = spectrum.energy_bin_edges[0]
+			maximum = spectrum.energy_bin_edges[-1]
+		else:
+			minimum, maximum = min(limits), max(limits)
+		try:
+			gaussian = fit_gaussian(spectrum, minimum, maximum)
+		except RuntimeError:
+			curve.set_visible(False)
+		else:
+			curve.set_ydata(gaussian_function(spectrum.energy_bin_edges, gaussian))
+			curve.set_visible(True)
+	update_plot()
+
 	def on_click(event: MouseEvent):
-		nonlocal limits
 		# whenever the user clicks...
 		if type(event) is MouseEvent and event.xdata is not None:
 			# if it's a right-click, delete a point
@@ -164,26 +182,14 @@ def choose_limits(spectrum: "Spectrum", x_label: str, y_label: str) -> tuple[flo
 					lines[i].set_visible(True)
 				else:
 					lines[i].set_visible(False)
-			if len(limits) == 2:
-				try:
-					gaussian = fit_gaussian(spectrum, min(limits), max(limits))
-				except RuntimeError:
-					curve.set_visible(False)
-				else:
-					curve.set_ydata(gaussian_function(spectrum.energy_bin_edges, gaussian))
-					curve.set_visible(True)
-			else:
-				curve.set_visible(False)
+			update_plot()
 	fig.canvas.mpl_connect('button_press_event', on_click)
 
 	while plt.fignum_exists("selection"):
 		plt.pause(.1)
-	if len(limits) != 2:
-		print("you didn't specify both limits. do it again.")
-		return choose_limits(spectrum, x_label, y_label)
 
 	# once the user is done, arrange the results
-	return min(limits), max(limits)
+	return minimum, maximum
 
 
 def count_raw_statistics(spectrum: "Spectrum", left: float, right: float) -> "Distribution":
