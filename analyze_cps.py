@@ -431,6 +431,8 @@ def infer_spectrum(data: DataFrame, calibration: "CPS", background: DataArray,
 def downsample(spectrum: "Spectrum") -> "Spectrum":
 	""" increase the bin size of a 1D spectrum by an automaticly chosen factor, preserving its zeroth moment """
 	typical_value = np.quantile(spectrum.values, .90)
+	if typical_value <= 0:  # watch out for this arithmetic error
+		return spectrum
 	typical_error = np.quantile(spectrum.errors, .90)
 	factor = max(1, round(sqrt(typical_error/typical_value/.05)))
 	indices = np.reshape(np.arange(floor(spectrum.values.size/factor)*factor), (-1, factor))
