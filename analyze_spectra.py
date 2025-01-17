@@ -1,7 +1,7 @@
 import argparse
 import os
 import re
-from math import sqrt, floor, pi, log, log10, nan, inf
+from math import sqrt, floor, pi, log, log10, nan
 from typing import Union, Optional
 
 import numpy as np
@@ -15,6 +15,13 @@ from scipy import optimize
 FIGURE_SIZE = (7.5, 4)
 HIGHLIGHT_COLOR = "#C00000"
 CATEGORICAL_COLORS = ["#406836", "#BA5662", "#1D4881"]
+
+CPS_RESPONSE_WIDTHS = {  # this is all assuming 2mm slit width and at the nearest proton birth energy
+	(1, "c11w"): .1051, # MeV
+	(1, "d8w"): 1.1142, # MeV
+	(2, "c11w"): .1031, # MeV
+	(2, "d9w"): 1.2130, # MeV
+}
 
 
 def main(directory: str) -> None:
@@ -49,7 +56,7 @@ def main(directory: str) -> None:
 
 	# then go thru them by shot
 	for shot in sorted(spectra.keys()):
-		for spectra_on_each_cps in spectra[shot].values():
+		for cps_index, spectra_on_each_cps in spectra[shot].items():
 			for spectrum, energy_label, spectrum_label, filename in spectra_on_each_cps:
 				print(filename)
 
@@ -62,21 +69,31 @@ def main(directory: str) -> None:
 					gaussian = fit_gaussian(spectrum, left, right)
 				except RuntimeError as e:
 					print(e)
-					continue
+					gaussian = None
+
+				if gaussian is not None:
+					try:
+						analyze_and_print_peak(gaussian, cps_index, filename)
+					except RuntimeError as e:
+						print(e)
 
 				# plot the results
 				plt.figure(figsize=FIGURE_SIZE)
 				plt.locator_params(steps=[1, 2, 5, 10])
 				plot_bars(spectrum, energy_label, spectrum_label)
-				plt.plot(spectrum.energy_bin_edges,
-				         gaussian_function(spectrum.energy_bin_edges, gaussian),
-				         HIGHLIGHT_COLOR, zorder=2)
+				if gaussian is not None:
+					plt.plot(spectrum.energy_bin_edges,
+					         gaussian_function(spectrum.energy_bin_edges, gaussian),
+					         HIGHLIGHT_COLOR, zorder=2)
 				plt.title(filename)
-				annotate_plot(f"Raw yield = {raw.total:.2e}\n"
-				              f"Raw mean = {raw.mean:.2f} MeV\n"
+				annotation = (f"Raw yield = {raw.total:.2e}\n"
+				              f"Raw mean = {raw.mean:.2f} MeV\n")
+				if gaussian is not None:
+					annotation += (
 				              f"Fit yield = {gaussian.total:.2e}\n"
 				              f"Fit mean = {gaussian.mean:.2f} MeV\n"
 				              f"Fit width = {gaussian.sigma*2*sqrt(2*log(2)):.2f} MeV")
+				annotate_plot(annotation)
 				plt.tight_layout()
 
 				# save and display the figure
@@ -244,6 +261,36 @@ def gaussian_function(x: NDArray[float],
 	return N/sqrt(2*pi*σ**2)*np.exp(-(x - μ)**2/(2*σ**2))
 
 
+def analyze_and_print_peak(peak: "Distribution", cps_index: int, filename: str) -> None:
+	""" take a peak and calculate some physical values based on it, and print them out """
+	# use the gaussian fit to infer temperature
+	finger_descriptor = re.search(r"[a-d][0-9]+w?", filename, re.IGNORECASE)
+	if finger_descriptor is not None:
+		finger = finger_descriptor.group()
+	else:
+		raise RuntimeError(f"I can't find the finger specification in {filename!r}.")
+	response_sigma = CPS_RESPONSE_WIDTHS[cps_index, finger]/sqrt(12)  # the sqrt(12) converts from box width to sigma
+	corrected_sigma = (peak.sigma**2 - response_sigma**2)**(1/2)
+	if finger.startswith("d8") or finger.startswith("d9"):
+		reaction = "D³He"
+		mass_ratio = 5
+		E0 = 14.68
+	elif finger.startswith("c"):
+		reaction = "DD"
+		mass_ratio = 4
+		E0 = 3.02
+	else:
+		raise RuntimeError(f"I can't tell what particle this is supposed to be and I'm scared (what does {finger!r} measure?).")
+	ion_temperature = 9e-2*mass_ratio/E0*(corrected_sigma*2*sqrt(2*log(2)))**2  # see Frenje, Plasma Phys. Control. Fusion 62 (2020), 023001, p. 7
+
+	# print out some analysis results
+	print(f"  Measured Yn = {peak.total:.3e}")
+	print(f"  Measured Eμ = {peak.mean:.3f} MeV")
+	print(f"  Measured σE = {peak.sigma*1e3:.0f} keV")
+	print(f"  Inferred σE = {corrected_sigma*1e3:.0f} keV")
+	print(f"  Inferred Ti = {ion_temperature*1e3:.0f} keV (assuming this is {reaction})")
+
+
 def plot_bars(spectrum: "Spectrum", x_label: str, y_label: str,
               color: str = "k", label: Optional[str] = None) -> None:
 	""" plot and label a spectrum in that blocky style that makes it look like a histogram, with error bars """
@@ -293,6 +340,20 @@ class Quantity:
 	def __mul__(self, other: float) -> "Quantity":
 		return Quantity(self.value*other, self.error*abs(other))
 
+	def __rmul__(self, other: float) -> "Quantity":
+		return self.__mul__(other)
+
+	def __pow__(self, exponent: float) -> "Quantity":
+		return Quantity(self.value**exponent, exponent*self.error*self.value**(exponent - 1))
+
+	def __add__(self, other: Union[float, "Quantity"]) -> "Quantity":
+		other = Quantity.convert(other)
+		return Quantity(self.value + other.value, sqrt(self.error**2 + other.error**2))
+
+	def __sub__(self, other: Union[float, "Quantity"]) -> "Quantity":
+		other = Quantity.convert(other)
+		return Quantity(self.value - other.value, sqrt(self.error**2 + other.error**2))
+
 	def __abs__(self) -> "Quantity":
 		return Quantity(abs(self.value), self.error)
 
@@ -307,6 +368,13 @@ class Quantity:
 		else:
 			return f"{format(self.value, format_spec)} ± " \
 			       f"{format(self.error, format_spec)}"
+
+	@staticmethod
+	def convert(value: Union[float, "Quantity"]) -> "Quantity":
+		if type(value) is Quantity:
+			return value
+		else:
+			return Quantity(value, 0)
 
 
 class Distribution:
