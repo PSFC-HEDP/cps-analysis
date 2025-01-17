@@ -92,6 +92,7 @@ def main(particle: str, directory: str, user_specified_cps: Optional[int], max_c
 				# plot the results
 				plt.figure(figsize=FIGURE_SIZE)
 				plot_bars(spectrum, f"{particle_name} energy (MeV)", "Spectrum (MeV^-1)")
+				plt.grid("on")
 				plt.tight_layout()
 
 				plt.show()

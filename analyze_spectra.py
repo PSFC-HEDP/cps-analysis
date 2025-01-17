@@ -78,7 +78,7 @@ def main(directory: str) -> None:
 						print(e)
 
 				# plot the results
-				plt.figure(figsize=FIGURE_SIZE)
+				plt.figure(figsize=FIGURE_SIZE, facecolor="none")
 				plt.locator_params(steps=[1, 2, 5, 10])
 				plot_bars(spectrum, energy_label, spectrum_label)
 				if gaussian is not None:
@@ -97,8 +97,7 @@ def main(directory: str) -> None:
 				plt.tight_layout()
 
 				# save and display the figure
-				plt.savefig(os.path.join(directory, filename + ".png"),
-				            dpi=300, transparent=True)
+				plt.savefig(os.path.join(directory, filename + ".png"), dpi=300)
 				plt.show()
 
 		# add in an overlaid plot if both CPS were used
@@ -106,7 +105,7 @@ def main(directory: str) -> None:
 			# do one for each set of corresponding fingers
 			num_finger_pairs = min(len(spectra[shot][cps]) for cps in spectra[shot])
 			for finger_index in range(num_finger_pairs):
-				plt.figure(figsize=FIGURE_SIZE)
+				plt.figure(figsize=FIGURE_SIZE, facecolor="none")
 				plt.locator_params(steps=[1, 2, 5, 10])
 				energy_minima, energy_maxima = [], []
 				for cps, spectra_on_this_cps in spectra[shot].items():
@@ -118,7 +117,7 @@ def main(directory: str) -> None:
 				plt.legend()
 				plt.xlim(max(energy_minima), min(energy_maxima))
 				plt.tight_layout()
-				plt.savefig(os.path.join(directory, f"{shot}_{finger_index}_spectra.png"), transparent=True)
+				plt.savefig(os.path.join(directory, f"{shot}_{finger_index}_spectra.png"))
 
 		plt.show()
 
@@ -153,12 +152,12 @@ def choose_limits(spectrum: "Spectrum", x_label: str, y_label: str) -> tuple[flo
 	""" prompt the user to click on a plot to choose lower and upper limits """
 	fig = plt.figure("selection", figsize=FIGURE_SIZE)
 	plt.locator_params(steps=[1, 2, 5, 10])
-	plot_bars(spectrum, x_label, y_label)
+	plot_bars(spectrum, x_label, y_label, grid=False)
 	plt.title("click to select the lower and upper bounds of the peak, then close this plot")
 	plt.tight_layout()
 	lines = [plt.plot([], [], "k--")[0], plt.plot([], [], "k--")[0]]
 	curve, = plt.plot(spectrum.energy_bin_edges, np.zeros_like(spectrum.energy_bin_edges),
-	                  HIGHLIGHT_COLOR, zorder=2)
+	                  HIGHLIGHT_COLOR, zorder=2, linestyle="--")
 	curve.set_visible(False)
 
 	minimum = spectrum.energy_bin_edges[0]
@@ -286,13 +285,13 @@ def analyze_and_print_peak(peak: "Distribution", cps_index: int, filename: str) 
 	# print out some analysis results
 	print(f"  Measured Yn = {peak.total:.3e}")
 	print(f"  Measured Eμ = {peak.mean:.3f} MeV")
-	print(f"  Measured σE = {peak.sigma*1e3:.0f} keV")
-	print(f"  Inferred σE = {corrected_sigma*1e3:.0f} keV")
-	print(f"  Inferred Ti = {ion_temperature*1e3:.0f} keV (assuming this is {reaction})")
+	print(f"  Measured σE = {peak.sigma*1e3:.1f} keV")
+	print(f"  Inferred σE = {corrected_sigma*1e3:.1f} keV")
+	print(f"  Inferred Ti = {ion_temperature*1e3:.1f} keV (assuming this is {reaction})")
 
 
 def plot_bars(spectrum: "Spectrum", x_label: str, y_label: str,
-              color: str = "k", label: Optional[str] = None) -> None:
+              color: str = "k", label: Optional[str] = None, grid=True) -> None:
 	""" plot and label a spectrum in that blocky style that makes it look like a histogram, with error bars """
 	x = np.repeat(spectrum.energy_bin_edges, 2)[1:-1]
 	y = np.repeat(spectrum.values, 2)
@@ -303,7 +302,8 @@ def plot_bars(spectrum: "Spectrum", x_label: str, y_label: str,
 	plt.xlim(spectrum.energy_bin_edges[0], spectrum.energy_bin_edges[-1])
 	plt.xlabel(x_label)
 	plt.ylabel(y_label)
-	plt.grid("on")
+	if grid:
+		plt.grid("on")
 
 
 def annotate_plot(text: str) -> None:

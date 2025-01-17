@@ -78,7 +78,7 @@
 
  This program isn’t as powerful as Fredrick’s AnalyzeCR39.
  If you have a use case that doesn’t seem to be covered by the choices you’re given,
- I encourage you to code it up here, but acknowledge that it’s probably easiest to use AnalyzeCR39 instead.
+ I encourage you to code it up here, but I acknowledge that it’s probably easiest to use AnalyzeCR39 instead.
  Nevertheless, I hope that this already covers most use cases in a more convenient format.
 
 ## Limitations
