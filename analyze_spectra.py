@@ -229,7 +229,7 @@ def fit_gaussian(spectrum: "Spectrum", left: float, right: float) -> "Distributi
 	values = []
 	for i in range(len(popt)):
 		values.append(Quantity(popt[i], sqrt(pcov[i, i])))
-	return Distribution(values[0], values[1], values[2])
+	return Distribution(values[0], values[1], abs(values[2]))
 
 
 def gaussian_function(x: NDArray[float],
@@ -285,11 +285,16 @@ class Spectrum:
 class Quantity:
 	def __init__(self, value: float, error: float):
 		""" an inferred number and its error bar """
+		if error < 0:
+			raise ValueError("the error must be nonnegative")
 		self.value = value
 		self.error = error
 
 	def __mul__(self, other: float) -> "Quantity":
-		return Quantity(self.value*other, self.error*other)
+		return Quantity(self.value*other, self.error*abs(other))
+
+	def __abs__(self) -> "Quantity":
+		return Quantity(abs(self.value), self.error)
 
 	def __format__(self, format_spec: str) -> str:
 		# for "e", manage the exponent manually to make the value and error match
@@ -298,7 +303,7 @@ class Quantity:
 			new_format_spec = format_spec.replace("e", "f")
 			return f"{format(self.value/10**exponent, new_format_spec)}e{exponent:+03d} ± " \
 			       f"{format(self.error/10**exponent, new_format_spec)}e{exponent:+03d}"
-		# otherwise just delegate tothe built-in format for each of the value and error
+		# otherwise just delegate to the built-in format for each of the value and error
 		else:
 			return f"{format(self.value, format_spec)} ± " \
 			       f"{format(self.error, format_spec)}"
